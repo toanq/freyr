@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-03T16:41:24.042Z",
+  "timestamp": "2026-08-03T16:56:24.050Z",
   "projectRoot": "/home/toan/bench/toan/synora",
   "structure": {
     "hasPackageJson": false,
@@ -7,5 +7,5 @@
     "hasClaudeConfig": true,
     "hasClaudeFlow": true
   },
-  "scannedAt": 1785775284042
+  "scannedAt": 1785776184050
 }

@@ -125,26 +125,28 @@ constexpr int kHeaderDividerY = 38;
 constexpr int kHeroClockBaselineY = 130;
 constexpr int kHeroDividerY = 162;
 
-// 2x2 sensor tile grid, below the hero.
-constexpr int kDashboardGridMarginX = 12;
-constexpr int kDashboardGridTopY = 172;
-constexpr int kDashboardGridGutter = 12;
-constexpr int kDashboardTileWidth = (DISPLAY_WIDTH - 2 * kDashboardGridMarginX - kDashboardGridGutter) / 2;
-constexpr int kDashboardTileHeight = 80;
-constexpr int kDashboardTileHalfW = kDashboardTileWidth / 2;
-constexpr int kDashboardTileHalfH = kDashboardTileHeight / 2;
+// Bottom auto-watering status bar -- declared here (rather than down by
+// DrawDashboardScreen's other auto-water constants) since the sensor grid
+// below needs kAutoWaterDividerY as its own bottom edge.
+constexpr int kAutoWaterDividerY = 372;
+constexpr int kAutoWaterBarBaselineY = 392;
 
-// Tile center X/Y for column 0/1, row 0/1 -- computed once here rather than
-// re-deriving corner math inline at each of the four DrawSensorTile() calls.
-constexpr int kDashboardTileCenterX[] = {
-    kDashboardGridMarginX + kDashboardTileHalfW,
-    kDashboardGridMarginX + kDashboardTileWidth + kDashboardGridGutter + kDashboardTileHalfW,
-};
+// 2x2 sensor grid: no card backgrounds, no gutters -- 4 equal rects filling
+// the space between the hero divider and the auto-water divider exactly,
+// split by one vertical + one horizontal line (see DrawDashboardScreen).
+constexpr int kDashboardGridTopY = kHeroDividerY;
+constexpr int kDashboardGridBottomY = kAutoWaterDividerY;
+constexpr int kDashboardGridHeight = kDashboardGridBottomY - kDashboardGridTopY;
+constexpr int kDashboardRowHeight = kDashboardGridHeight / 2;
+
+// Tile center X/Y for column 0/1, row 0/1 -- the midpoint of each equal
+// quadrant, computed once here rather than re-deriving inline at each of
+// the four DrawSensorTile() calls.
+constexpr int kDashboardTileCenterX[] = {DISPLAY_WIDTH / 4, DISPLAY_WIDTH * 3 / 4};
 constexpr int kDashboardTileCenterY[] = {
-    kDashboardGridTopY + kDashboardTileHalfH,
-    kDashboardGridTopY + kDashboardTileHeight + kDashboardGridGutter + kDashboardTileHalfH,
+    kDashboardGridTopY + kDashboardRowHeight / 2,
+    kDashboardGridTopY + kDashboardRowHeight + kDashboardRowHeight / 2,
 };
-constexpr int kDashboardGridTotalHeight = 2 * kDashboardTileHeight + kDashboardGridGutter;
 
 // Icon center sits near the top of the tile; value/label baselines below it,
 // all relative to the tile's own center Y so DrawSensorTile stays a single
@@ -153,10 +155,6 @@ constexpr int kDashboardGridTotalHeight = 2 * kDashboardTileHeight + kDashboardG
 constexpr int kTileIconOffsetY = -22;
 constexpr int kTileValueBaselineOffsetY = 18;
 constexpr int kTileLabelBaselineOffsetY = 40;
-
-// Bottom auto-watering status bar.
-constexpr int kAutoWaterDividerY = 372;
-constexpr int kAutoWaterBarBaselineY = 392;
 
 constexpr int kFontTestLeftX = 4;
 constexpr int kFontTestTopBaselineY = 20;
@@ -594,8 +592,8 @@ void SynoraDisplay::DrawDashboardScreen() {
     // top-left soil, top-right temperature, bottom-left humidity,
     // bottom-right water level. No tile card backgrounds -- a "+" of divider
     // lines separates the four instead (matching the header/hero dividers).
-    FillRect(DISPLAY_WIDTH / 2, kDashboardGridTopY, 1, kDashboardGridTotalHeight, kDividerColor);
-    FillRect(0, kDashboardGridTopY + kDashboardGridTotalHeight / 2, DISPLAY_WIDTH, 1, kDividerColor);
+    FillRect(DISPLAY_WIDTH / 2, kDashboardGridTopY, 1, kDashboardGridHeight, kDividerColor);
+    FillRect(0, kDashboardGridTopY + kDashboardRowHeight, DISPLAY_WIDTH, 1, kDividerColor);
 
     char value[16];
 
