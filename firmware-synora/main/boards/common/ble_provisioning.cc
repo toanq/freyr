@@ -401,14 +401,15 @@ int BleProvisioning::DeviceInfoAccessCb(uint16_t, uint16_t, ble_gatt_access_ctxt
 
     const esp_app_desc_t* app_desc = esp_app_get_description();
 
-    // isPaired is hardcoded false for now -- the reference firmware sources
-    // this from TelemetryReporter's cached last-heartbeat response, but
-    // telemetry hasn't landed in this greenfield tree yet (Phase 3). Revisit
-    // once it does: the app just falls back to a full Wi-Fi form either way,
-    // so this is a UX-only simplification, not a correctness bug.
+    // Load-bearing now that BLE can resume on an already-paired device that
+    // lost Wi-Fi (see SynoraBoard::CheckWifiLossRecovery()): the app needs
+    // this to tell "first-time setup" apart from "already paired, just
+    // reconnecting" so it can show the right screen instead of always
+    // falling back to a full Wi-Fi form.
+    bool is_paired = DeviceActivation::GetInstance().IsPaired();
     char json[224];
-    snprintf(json, sizeof(json), R"({"deviceId":"%s","firmwareVersion":"%s","model":"synora","isPaired":false})",
-              device_id, app_desc->version);
+    snprintf(json, sizeof(json), R"({"deviceId":"%s","firmwareVersion":"%s","model":"synora","isPaired":%s})",
+              device_id, app_desc->version, is_paired ? "true" : "false");
     return WriteStringReply(ctxt, json);
 }
 
@@ -455,6 +456,8 @@ int BleProvisioning::ControlAccessCb(uint16_t, uint16_t, ble_gatt_access_ctxt* c
         self.HandleMoreAps();
     } else if (command == "reactivate") {
         self.HandleReactivate();
+    } else if (command == "reconnect") {
+        self.HandleReconnect();
     } else {
         ESP_LOGW(TAG, "Unknown control command: %s", command.c_str());
         return BLE_ATT_ERR_UNLIKELY;
@@ -684,6 +687,44 @@ void BleProvisioning::HandleReactivate() {
             self.SetState(ProvisioningState::kError);
             self.NotifyStatus();
         }
+    });
+}
+
+// Retries whatever network SsidManager already has saved, without touching
+// DeviceActivation at all -- deliberately distinct from HandleCommit()/
+// ConnectAndActivate(), which always Reset()s and re-activates. This is the
+// "just try reconnecting" action for a paired device that resumed BLE after
+// SynoraBoard::CheckWifiLossRecovery() saw sustained Wi-Fi loss (see that
+// function's doc comment): pairing state is left completely untouched here,
+// so BLE turns back off (SynoraBoard, once it observes Wi-Fi reconnected)
+// without ever needing a fresh activation code or a re-pair from the app.
+void BleProvisioning::HandleReconnect() {
+    ScheduleOnTask([]() {
+        auto& self = GetInstance();
+        const auto& list = SsidManager::GetInstance().GetSsidList();
+        if (list.empty()) {
+            ESP_LOGW(TAG, "reconnect requested but no known networks are saved");
+            self.SetState(ProvisioningState::kError);
+            self.NotifyStatus();
+            return;
+        }
+
+        // list[0] is the default/most-recently-used network (SetDefaultSsid
+        // moves entries to the front) -- same assumption
+        // RevertToPreRescanNetworkIfNeeded() already makes.
+        WifiManager::GetInstance().ConnectToKnownNetwork(list[0].ssid, list[0].password);
+
+        constexpr int kConnectTimeoutSec = 30;
+        for (int waited = 0; waited < kConnectTimeoutSec && !WifiManager::GetInstance().IsConnected(); ++waited) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+
+        bool connected = WifiManager::GetInstance().IsConnected();
+        if (!connected) {
+            ESP_LOGW(TAG, "reconnect: Wi-Fi connect timed out");
+        }
+        self.SetState(connected ? ProvisioningState::kOnline : ProvisioningState::kError);
+        self.NotifyStatus();
     });
 }
 

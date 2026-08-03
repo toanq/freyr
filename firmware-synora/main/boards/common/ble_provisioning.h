@@ -76,6 +76,7 @@ private:
     void HandleRescan();
     void HandleMoreAps();
     void HandleReactivate();
+    void HandleReconnect();
 
     // Runs off the BLE callback's task context (scheduled from HandleCommit):
     // connects to the newly-committed Wi-Fi, then activates against the

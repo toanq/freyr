@@ -1,6 +1,7 @@
 #ifndef SYNORA_BOARD_H_
 #define SYNORA_BOARD_H_
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -9,6 +10,7 @@
 #include <esp_event.h>
 
 #include "boards/common/button.h"
+#include "dashboard_status.h"
 #include "led_indicator.h"
 #include "pump_driver.h"
 #include "sensor_readings.h"
@@ -16,6 +18,7 @@
 #include "soil_moisture_sensor.h"
 #include "vl53l1x_water_level_sensor.h"
 #include "watering_scheduler.h"
+#include "wifi_manager.h"
 
 // Synora device board layer (ESP32-S3 N16R8). Grows per build-out phase --
 // today it owns the BOOT-button unpair action, brings up BLE provisioning +
@@ -49,15 +52,37 @@ public:
     // survives a reboot; see watering_scheduler_).
     bool IsAutoWateringEnabled() const { return watering_scheduler_.HasEnabledSchedule(); }
 
+    // For the dashboard's top-left WiFi status icon. Reuses TileStatus's
+    // existing green/amber/red semantics (dashboard_status.h) rather than a
+    // bespoke WiFi-specific enum: kGood = connected, kWarn = scanning/
+    // connecting, kBad = disconnected/never connected.
+    TileStatus GetWifiStatus() const;
+
+    // For SynoraDisplay::GetScreen() -- true once WiFi has been down long
+    // enough (WIFI_LOST_BLE_FALLBACK_SEC) while paired that CheckWifiLossRecovery()
+    // has resumed BLE advertising, so the dashboard can switch to a "WiFi
+    // lost, reconnect via the app" screen instead of showing stale sensor
+    // tiles as if nothing were wrong.
+    bool IsWifiLostRecoveryActive() const { return ble_resumed_for_wifi_loss_.load(); }
+
 private:
     void InitializeFactoryResetButton();
     void InitializeVoiceButton();
     void InitializeSensors();
     void InitializeCommandHandlers();
     void InitializeMcpTools();
+    void InitializeWifiStatusTracking();
     void InitializeDnsFallback();
     void FactoryReset();
     void HandleWaterCommand(const std::string& payload);
+
+    // Called every TelemetryTask tick -- resumes BLE advertising
+    // (BleProvisioning::Init(), already idempotent) once WiFi has been down
+    // for WIFI_LOST_BLE_FALLBACK_SEC while paired, and turns it back off
+    // (Deinit()) once WiFi reconnects. No-op while unpaired -- BLE's on/off
+    // state in that case is already owned by the constructor's boot check
+    // and SynoraMqtt::ApplyIsPaired().
+    void CheckWifiLossRecovery();
 
     // Shared between the MQTT commands/water|ping handlers and the
     // self.do_watering/self.find_device MCP tools -- see InitializeMcpTools().
@@ -80,6 +105,23 @@ private:
     PumpDriver pump_;
     LedIndicator find_me_led_;
     WateringScheduler watering_scheduler_;
+
+    // Updated from WifiManager's event callback (fires on the WiFi event
+    // task) -- read from SynoraDisplay's own task via GetWifiStatus(), so
+    // this needs to be atomic rather than plain state.
+    std::atomic<WifiEvent> wifi_event_ = WifiEvent::Disconnected;
+
+    // Millisecond timestamp (esp_timer_get_time()/1000 base) of the leading
+    // edge of the current disconnected streak; 0 while connected. Latched by
+    // the same WiFi event callback as wifi_event_, read by
+    // CheckWifiLossRecovery() on TelemetryTask's task.
+    std::atomic<int64_t> wifi_disconnected_since_ms_ = 0;
+
+    // True once CheckWifiLossRecovery() has resumed BLE advertising for a
+    // sustained WiFi loss while paired -- lets it know to Deinit() again once
+    // WiFi reconnects, and lets IsWifiLostRecoveryActive() drive the
+    // dashboard's "WiFi lost" screen.
+    std::atomic<bool> ble_resumed_for_wifi_loss_ = false;
 };
 
 #endif // SYNORA_BOARD_H_

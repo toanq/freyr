@@ -106,6 +106,13 @@
 // How often the telemetry reporter reads all sensors and POSTs to the server.
 #define TELEMETRY_REPORT_INTERVAL_SEC 60
 
+// How long WiFi must stay disconnected (while paired) before the device
+// resumes BLE advertising so the phone app can reconnect it or hand it new
+// credentials -- see SynoraBoard::CheckWifiLossRecovery(). Well past the
+// WiFi driver's own reconnect/backoff window (a few seconds), so this only
+// fires on genuinely sustained loss, not a brief blip.
+#define WIFI_LOST_BLE_FALLBACK_SEC 90
+
 // GPIO19/20 are the native-USB D-/D+ pins, 22-25 don't exist on the chip,
 // 26-32 are reserved by SPI flash, 33-37 by octal PSRAM
 // (CONFIG_SPIRAM_MODE_OCT), 3/45/46 are strapping pins, 43/44 are the

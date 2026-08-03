@@ -28,6 +28,7 @@ enum class EyesState {
 enum class DisplayScreen {
     kEyes,
     kPairing,
+    kWifiLost,
     kDashboard,
     kFontTest,
     kWatering,
@@ -102,7 +103,10 @@ private:
     void DrawMouth();
     void DrawLine(int x0, int y0, int x1, int y1, int thickness, uint16_t color);
     void FillRoundedRect(int cx, int cy, int half_width, int half_height, int corner_radius, uint16_t color);
+    void DrawPairingStyleScreen(const char* const* title_lines, int title_line_count,
+                                const char* const* hint_lines, int hint_line_count);
     void DrawPairingScreen();
+    void DrawWifiLostScreen();
     void DrawDashboardScreen();
     void DrawSensorTile(int cx, int cy, TileStatus status, const char* label, const char* value,
                         void (SynoraDisplay::*draw_icon)(int, int, uint16_t));
@@ -110,6 +114,7 @@ private:
     void DrawDropIcon(int cx, int cy, uint16_t color);
     void DrawWindIcon(int cx, int cy, uint16_t color);
     void DrawWaveIcon(int cx, int cy, uint16_t color);
+    void DrawWifiStatusIcon(int x, int baseline_y, uint16_t color);
     void DrawFontTestScreen();
     void DrawWateringScreen(int frame, float remaining_fraction);
     void RandomizeWateringDrops();

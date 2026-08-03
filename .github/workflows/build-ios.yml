@@ -86,6 +86,16 @@ jobs:
             brew install cocoapods
           fi
 
+      # `app/ios/Podfile` is NOT in the repo, and that's normal: `flutter
+      # create` doesn't emit one. The Flutter tool writes it lazily, together
+      # with Generated.xcconfig and GeneratedPluginRegistrant, the first time
+      # it generates the iOS platform config -- which `flutter pub get` alone
+      # does not reliably do. `--config-only` does exactly that generation and
+      # then stops short of xcodebuild, so the `pod install` below has a
+      # Podfile to work from (previously it hit "No `Podfile' found").
+      - name: Generate iOS platform config (writes ios/Podfile)
+        run: flutter build ios --config-only --release --no-codesign
+
       - name: pod install
         run: pod install --repo-update
         working-directory: app/ios

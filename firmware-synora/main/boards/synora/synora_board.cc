@@ -15,6 +15,7 @@
 #include <esp_log.h>
 #include <esp_netif.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -44,6 +45,7 @@ SynoraBoard::SynoraBoard()
     // at all, and it looked like a DNS problem until a full boot log showed
     // no "Connecting to WiFi"/"Got IP" lines ever appearing.
     WifiManager::GetInstance().StartStation();
+    InitializeWifiStatusTracking();
     InitializeDnsFallback();
 
     InitializeFactoryResetButton();
@@ -102,6 +104,7 @@ void SynoraBoard::TelemetryTask(void* arg) {
         vTaskDelay(pdMS_TO_TICKS(TELEMETRY_REPORT_INTERVAL_SEC * 1000));
         self->RefreshSensors();
         self->PublishTelemetry();
+        self->CheckWifiLossRecovery();
     }
 }
 
@@ -291,6 +294,67 @@ void SynoraBoard::InitializeMcpTools() {
 // this back to the broken DHCP-provided server.
 void SynoraBoard::InitializeDnsFallback() {
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &SynoraBoard::OnGotIp, nullptr);
+}
+
+// Fires on the WiFi event task (see WifiManager::NotifyEvent's call sites in
+// wifi_manager.cc) -- just latches the most recent event into wifi_event_,
+// read back (from SynoraDisplay's own task) via GetWifiStatus().
+void SynoraBoard::InitializeWifiStatusTracking() {
+    WifiManager::GetInstance().SetEventCallback([this](WifiEvent event, const std::string&) {
+        wifi_event_.store(event);
+        if (event == WifiEvent::Connected) {
+            wifi_disconnected_since_ms_.store(0);
+        } else if (event == WifiEvent::Disconnected && wifi_disconnected_since_ms_.load() == 0) {
+            // Leading edge only -- repeated Disconnected events during the
+            // driver's own reconnect retries shouldn't keep pushing this
+            // forward, or CheckWifiLossRecovery()'s threshold would never
+            // trip.
+            wifi_disconnected_since_ms_.store(esp_timer_get_time() / 1000);
+        }
+    });
+}
+
+TileStatus SynoraBoard::GetWifiStatus() const {
+    switch (wifi_event_.load()) {
+        case WifiEvent::Connected:
+            return TileStatus::kGood;
+        case WifiEvent::Scanning:
+        case WifiEvent::Connecting:
+            return TileStatus::kWarn;
+        default:  // Disconnected, ConfigModeEnter/Exit (this board never uses config-AP mode)
+            return TileStatus::kBad;
+    }
+}
+
+void SynoraBoard::CheckWifiLossRecovery() {
+    if (!DeviceActivation::GetInstance().IsPaired()) {
+        // Not our concern while unpaired -- the constructor's boot check and
+        // SynoraMqtt::ApplyIsPaired() already own BLE's on/off state then.
+        // Force-clear so this flag can't get stuck true across an
+        // unpair/re-pair cycle: ConnectAndActivate() calls
+        // DeviceActivation::Reset() (clearing IsPaired()) mid-flow while
+        // submitting new credentials, which would otherwise trip this
+        // early-return forever after the first such cycle.
+        ble_resumed_for_wifi_loss_.store(false);
+        return;
+    }
+
+    int64_t since = wifi_disconnected_since_ms_.load();
+    if (since == 0) {
+        if (ble_resumed_for_wifi_loss_.exchange(false)) {
+            ESP_LOGI(TAG, "WiFi reconnected -- turning BLE back off");
+            BleProvisioning::GetInstance().Deinit();
+        }
+        return;
+    }
+
+    int64_t disconnected_ms = esp_timer_get_time() / 1000 - since;
+    if (disconnected_ms >= static_cast<int64_t>(WIFI_LOST_BLE_FALLBACK_SEC) * 1000 &&
+        !ble_resumed_for_wifi_loss_.exchange(true)) {
+        ESP_LOGW(TAG, "WiFi lost for %llds while paired -- resuming BLE advertising",
+                 static_cast<long long>(disconnected_ms / 1000));
+        BleProvisioning::GetInstance().Init();
+    }
 }
 
 void SynoraBoard::OnGotIp(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {

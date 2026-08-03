@@ -87,6 +87,14 @@ constexpr const char* kPairingHintLines[] = {"Mở ứng dụng Synora trên", "
 constexpr int kPairingHintBaselineY[] = {140, 164, 188};
 constexpr int kQrTopY = 202;
 
+// Shown instead of the pairing screen once CheckWifiLossRecovery() resumes
+// BLE for an already-paired device that's lost WiFi -- same 3-line layout
+// (kPairingTitleBaselineY/kPairingHintBaselineY apply to both) and same
+// generic app-download QR, just re-pairing/reconnect framing instead of
+// first-time-setup framing.
+constexpr const char* kWifiLostTitleLines[] = {"Mất kết nối WiFi", "Mở ứng dụng Synora", "để kết nối lại"};
+constexpr const char* kWifiLostHintLines[] = {"Nhập lại mật khẩu WiFi", "hoặc đợi thiết bị tự", "kết nối lại"};
+
 // Dashboard, top to bottom: a "SYNORA" + leaf header, a hero block (clock +
 // big soil-moisture % + label -- soil moisture picked as the single most
 // actionable reading), a 2x2 grid of smaller colored sensor tiles (all four
@@ -118,6 +126,7 @@ constexpr int kHeaderTitleBaselineY = 28;
 constexpr int kHeaderLeafOffsetX = 14;  // gap from the title's right edge to the logo icon's left edge
 constexpr int kHeaderLogoTopY = 3;
 constexpr int kHeaderDividerY = 38;
+constexpr int kWifiIconX = 10;  // top-left corner, bottom-aligned with the title text baseline
 
 // Hero: the current time, big -- kFontGlyphs64 is rasterized at its own
 // native 64px size (see scripts/gen_font.py's FONT_SIZES), not scaled up
@@ -460,23 +469,39 @@ void SynoraDisplay::DrawEyes(int ry) {
     PushFramebuffer();
 }
 
-void SynoraDisplay::DrawPairingScreen() {
+// Shared by DrawPairingScreen()/DrawWifiLostScreen() -- both are a 3-line
+// title + 3-line hint + the same generic app-download QR, just with
+// different copy. title_line_count/hint_line_count must each be 3, matching
+// kPairingTitleBaselineY/kPairingHintBaselineY (the only baseline tables
+// that exist, since both current callers use exactly 3 lines each).
+void SynoraDisplay::DrawPairingStyleScreen(const char* const* title_lines, int title_line_count,
+                                           const char* const* hint_lines, int hint_line_count) {
     std::memset(framebuffer_, 0, DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t));
 
-    for (size_t i = 0; i < sizeof(kPairingTitleLines) / sizeof(kPairingTitleLines[0]); i++) {
-        int width = MeasureTextWidth(kPairingTitleLines[i], kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
+    for (int i = 0; i < title_line_count; i++) {
+        int width = MeasureTextWidth(title_lines[i], kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
         DrawText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, (DISPLAY_WIDTH - width) / 2, kPairingTitleBaselineY[i],
-                 kPairingTitleLines[i], kTextColor, kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
+                 title_lines[i], kTextColor, kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
     }
-    for (size_t i = 0; i < sizeof(kPairingHintLines) / sizeof(kPairingHintLines[0]); i++) {
-        int width = MeasureTextWidth(kPairingHintLines[i], kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
+    for (int i = 0; i < hint_line_count; i++) {
+        int width = MeasureTextWidth(hint_lines[i], kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
         DrawText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, (DISPLAY_WIDTH - width) / 2, kPairingHintBaselineY[i],
-                 kPairingHintLines[i], kTextColor, kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
+                 hint_lines[i], kTextColor, kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
     }
     BlitMonoBitmap((DISPLAY_WIDTH - kQrDownloadWidth) / 2, kQrTopY, kQrDownloadBitmap, kQrDownloadWidth,
                    kQrDownloadHeight, kTextColor);
 
     PushFramebuffer();
+}
+
+void SynoraDisplay::DrawPairingScreen() {
+    DrawPairingStyleScreen(kPairingTitleLines, sizeof(kPairingTitleLines) / sizeof(kPairingTitleLines[0]),
+                           kPairingHintLines, sizeof(kPairingHintLines) / sizeof(kPairingHintLines[0]));
+}
+
+void SynoraDisplay::DrawWifiLostScreen() {
+    DrawPairingStyleScreen(kWifiLostTitleLines, sizeof(kWifiLostTitleLines) / sizeof(kWifiLostTitleLines[0]),
+                           kWifiLostHintLines, sizeof(kWifiLostHintLines) / sizeof(kWifiLostHintLines[0]));
 }
 
 namespace {
@@ -531,6 +556,21 @@ void SynoraDisplay::DrawWaveIcon(int cx, int cy, uint16_t /*color*/) {
                    kIconWaterLevelSize, kIconWaterLevelSize, kIconColorWaterLevel);
 }
 
+// Top-left header WiFi status icon: 3 ascending signal-strength bars (not a
+// wifi-arcs glyph -- plain FillRect bars stay legible at this small a size,
+// no new hollow-circle/arc primitive needed), bottom-aligned at baseline_y,
+// colored via TileColorForStatus(board_->GetWifiStatus()) so it reuses the
+// same green/amber/red semantics as the sensor tiles.
+void SynoraDisplay::DrawWifiStatusIcon(int x, int baseline_y, uint16_t color) {
+    constexpr int kBarWidth = 3;
+    constexpr int kBarGap = 2;
+    constexpr int kBarHeights[3] = {4, 7, 10};
+    for (int i = 0; i < 3; ++i) {
+        int bar_height = kBarHeights[i];
+        FillRect(x + i * (kBarWidth + kBarGap), baseline_y - bar_height, kBarWidth, bar_height, color);
+    }
+}
+
 // One dashboard tile: rounded-rect card in `status`'s color, an icon (drawn
 // via the given member-function pointer -- DrawThermometerIcon/DrawDropIcon/
 // DrawWindIcon/DrawWaveIcon all share this (cx, cy, color) signature) and
@@ -567,6 +607,7 @@ void SynoraDisplay::DrawDashboardScreen() {
              kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
     BlitMonoBitmap(header_left + header_width + kHeaderLeafOffsetX, kHeaderLogoTopY, kLogoIconBitmap, kLogoIconWidth,
                    kLogoIconHeight, kTileColorGood);
+    DrawWifiStatusIcon(kWifiIconX, kHeaderTitleBaselineY, TileColorForStatus(board_->GetWifiStatus()));
     FillRect(0, kHeaderDividerY, DISPLAY_WIDTH, 1, kDividerColor);
 
     // Hero: the current time, big -- "--:--" until the server has ever
@@ -661,7 +702,7 @@ void SynoraDisplay::DrawWateringScreen(int frame, float remaining_fraction) {
         int phase = (frame + drop.start_offset_ticks) % drop.cycle_ticks;
         int y = kWateringDropTopY + (kWateringDropBottomY - kWateringDropTopY) * phase / drop.cycle_ticks;
         BlitMonoBitmap(drop.x - kIconSoilMoistureSize / 2, y - kIconSoilMoistureSize / 2, kIconSoilMoistureBitmap,
-                       kIconSoilMoistureSize, kIconSoilMoistureSize, kTextColor);
+                       kIconSoilMoistureSize, kIconSoilMoistureSize, kIconColorWaterLevel);
     }
 
     FillRect(kProgressBarX, kProgressBarY, kProgressBarWidth, kProgressBarHeight, kProgressTrackColor);
@@ -759,6 +800,9 @@ DisplayScreen SynoraDisplay::GetScreen() {
     if (!DeviceActivation::GetInstance().IsPaired()) {
         return DisplayScreen::kPairing;
     }
+    if (board_->IsWifiLostRecoveryActive()) {
+        return DisplayScreen::kWifiLost;
+    }
     return DisplayScreen::kDashboard;
 }
 
@@ -797,6 +841,10 @@ void SynoraDisplay::AnimationTask(void* arg) {
         } else if (screen == DisplayScreen::kPairing) {
             if (screen_changed) {
                 self->DrawPairingScreen();
+            }
+        } else if (screen == DisplayScreen::kWifiLost) {
+            if (screen_changed) {
+                self->DrawWifiLostScreen();
             }
         } else if (screen == DisplayScreen::kDashboard) {
             // The hero clock has its own minute-boundary timer, independent
