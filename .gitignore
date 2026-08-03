@@ -1,0 +1,7 @@
+.env
+
+# ASR (faster-whisper/PhoWhisper) and TTS (VieNeu-TTS) model weights --
+# host-downloaded and bind-mounted into their containers (see asr/download_model.py,
+# tts/download_vieneu_model.py), not meant to live in git.
+asr/model-src/
+tts/vieneu-hf-cache/

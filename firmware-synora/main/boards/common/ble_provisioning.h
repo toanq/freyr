@@ -1,0 +1,152 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+#include <esp_err.h>
+
+struct ble_gatt_access_ctxt;
+struct ble_gatt_register_ctxt;
+struct ble_gap_event;
+
+// BLE GATT provisioning service (NimBLE). Advertises as "Synora-XXXX" and
+// exposes the characteristics from DESIGN.md section 2 (wifi_ssid,
+// wifi_password, wifi_scan, server_url, device_info, settings, activation,
+// control, status), handing committed Wi-Fi credentials to SsidManager
+// (78/esp-wifi-connect) and driving DeviceActivation for the server-side
+// activation flow. Deinit() is called once SynoraMqtt sees the server confirm
+// pairing (retained `state` topic, isPaired:true) -- not from this class
+// itself, since local activation success alone doesn't mean the phone has
+// actually called /devices/pair yet. Init() runs again if pairing is ever
+// undone (unlink), so the device stays re-pairable.
+class BleProvisioning {
+public:
+    static BleProvisioning& GetInstance();
+
+    esp_err_t Init();
+    esp_err_t Deinit();
+
+    bool IsCentralConnected() const { return conn_handle_ != 0; }
+
+    BleProvisioning(const BleProvisioning&) = delete;
+    BleProvisioning& operator=(const BleProvisioning&) = delete;
+
+private:
+    BleProvisioning() = default;
+    ~BleProvisioning() = default;
+
+    // Mirrors the `status` characteristic's documented state machine.
+    enum class ProvisioningState {
+        kIdle,
+        kJoining,
+        kOnline,
+        kActivated,
+        kError,
+    };
+
+    static void OnHostReset(int reason);
+    static void OnHostSync();
+    static void HostTask(void* param);
+
+    esp_err_t StartAdvertising();
+    static int GapEventHandler(ble_gap_event* event, void* arg);
+
+    esp_err_t RegisterGattService();
+
+    // Captures status_val_handle_/activation_val_handle_/wifi_scan_val_handle_ as
+    // NimBLE assigns them, since ble_gatts_add_svcs() doesn't hand them back any
+    // other way -- this is what makes NotifyStatus()/NotifyActivation() work.
+    static void GattSvrRegisterCb(ble_gatt_register_ctxt* ctxt, void* arg);
+
+    static int WifiSsidAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+    static int WifiPasswordAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+    static int WifiScanAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+    static int ServerUrlAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+    static int DeviceInfoAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+    static int SettingsAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+    static int ActivationAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+    static int ControlAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+    static int StatusAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+
+    // `control` characteristic commands.
+    void HandleCommit();
+    void HandleReboot();
+    void HandleFactoryReset();
+    void HandleTestWifi();
+    void HandleRescan();
+    void HandleMoreAps();
+    void HandleReactivate();
+
+    // Runs off the BLE callback's task context (scheduled from HandleCommit):
+    // connects to the newly-committed Wi-Fi, then activates against the
+    // server and notifies the phone with the resulting activation code.
+    void ConnectAndActivate();
+
+    // Reconnects to whatever network we were on before a rescan-triggered
+    // Disconnect(), if the user's subsequent commit didn't end up on a
+    // working network (Wi-Fi connect timeout, activation failure) or never
+    // happened at all (BLE disconnected mid-flow). No-op if
+    // pre_rescan_ssid_ is empty.
+    void RevertToPreRescanNetworkIfNeeded();
+
+    void SetState(ProvisioningState state);
+    void NotifyStatus();
+    void NotifyActivation();
+    void NotifyWifiScan();
+
+    // Returns cached_scan_chunk_ verbatim -- the GATT read callback for
+    // `wifi_scan`. Does not compute anything itself (see BuildNextScanChunk).
+    std::string ScanWifiNetworksJson();
+
+    // Computes the next chunk of the cached last-scan results as JSON
+    // starting from scan_cursor_, advances the cursor past it, and stores
+    // the result in cached_scan_chunk_ -- called once per explicit
+    // "rescan"/"more_aps" control command, never from the read callback
+    // itself. A single BLE GATT attribute value is hard-capped at 512 bytes
+    // (Bluetooth Core Spec Vol 3, Part F, 3.2.9), so this paginates:
+    // {"more":bool,"items":[[ssid,rssi],...]}.
+    void BuildNextScanChunk();
+
+    bool inited_ = false;
+    uint16_t conn_handle_ = 0;
+    uint16_t status_val_handle_ = 0;
+    uint16_t wifi_scan_val_handle_ = 0;
+    uint16_t activation_val_handle_ = 0;
+
+    // Set right before ConnectAndActivate() deliberately drops the BLE
+    // central connection to free the radio for the Wi-Fi connect attempt
+    // (Wi-Fi/BLE coexistence contention otherwise fails the connect
+    // outright). Tells GapEventHandler's BLE_GAP_EVENT_DISCONNECT case this
+    // specific disconnect is expected and not a "user backed out mid-rescan"
+    // one, so it skips RevertToPreRescanNetworkIfNeeded().
+    bool intentional_disconnect_ = false;
+
+    ProvisioningState state_ = ProvisioningState::kIdle;
+
+    // Wi-Fi credentials staged via wifi_ssid/wifi_password writes; only handed to
+    // SsidManager on a `control: commit`, so a partial/aborted pairing session
+    // never touches stored Wi-Fi config.
+    std::string pending_ssid_;
+    std::string pending_password_;
+    std::string server_url_;
+    std::string activation_code_;
+
+    // Index into the (RSSI-sorted) cached scan results of the next entry to
+    // serve -- reset to 0 by HandleRescan() (a fresh scan), advanced by
+    // BuildNextScanChunk() each time "rescan"/"more_aps" is explicitly
+    // handled.
+    size_t scan_cursor_ = 0;
+
+    // The SSID we were connected to right before HandleRescan() disconnected
+    // to get a clean (non-degraded) full scan -- empty if not currently in
+    // that state. Cleared on a successful ConnectAndActivate().
+    std::string pre_rescan_ssid_;
+
+    // The chunk computed by the most recent BuildNextScanChunk() call --
+    // ScanWifiNetworksJson() (the GATT read callback) just returns this
+    // fixed string verbatim, however many times it gets invoked, rather than
+    // computing a fresh (and cursor-advanced) one on every call (NimBLE/
+    // Android's own multi-part read handling can invoke the read callback
+    // twice per logical app-level read).
+    std::string cached_scan_chunk_ = R"({"more":false,"items":[]})";
+};

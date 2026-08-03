@@ -1,0 +1,37 @@
+# Common defaults for Synora firmware. Chip-specific overrides live in
+# sdkconfig.defaults.esp32s3.
+
+# C++: exceptions + RTTI are used by the audio/display stack.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+CONFIG_COMPILER_CXX_EXCEPTIONS_EMG_POOL_SIZE=1024
+CONFIG_COMPILER_CXX_RTTI=y
+
+# Bootloader: allow OTA rollback (two app partitions in the table below).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Partition table: Synora 16MB layout (dual OTA app + model spiffs for esp-sr).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/16m.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# TLS footprint (talking to Synora.Api over wss).
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
+CONFIG_MBEDTLS_SSL_RENEGOTIATION=n
+
+# Supplements (not replaces) the default certificate bundle with
+# certs/globalsign_root_ca.pem -- see that file's own comment for why:
+# Cloudflare's edge cert chain for synora.carcise.dev needs a root ESP-IDF's
+# bundle doesn't carry.
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="certs/globalsign_root_ca.pem"
+
+# Console over the native USB-Serial-JTAG peripheral (/dev/ttyACM0, the same
+# port already used for flashing/log monitoring) -- UART0 was never confirmed
+# wired to anything reachable on this board, see test_console.cc.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

@@ -1,0 +1,21 @@
+services:
+  flutter-dev:
+    image: instrumentisto/flutter:latest
+    container_name: synora-flutter-dev
+    # Host networking so `adb`/`flutter run -d ...` inside the container can
+    # reach the phone the same way the host does (adb over Wi-Fi at
+    # 192.168.x.x, or a USB-attached device via the host's adb server).
+    network_mode: host
+    working_dir: /app
+    volumes:
+      - .:/app
+      # Same host cache dirs already used by every docker-run build this
+      # session -- reusing them here keeps warm caches instead of starting over.
+      - /home/toan/.pub-cache:/root/.pub-cache
+      - /home/toan/.gradle-cache-host:/root/.gradle
+      # Debug builds are signed with an auto-generated ~/.android/debug.keystore --
+      # without persisting it, every fresh container mints a new one and the
+      # resulting APK can no longer update whatever's currently installed
+      # (INSTALL_FAILED_UPDATE_INCOMPATIBLE). Persisting keeps it stable.
+      - /home/toan/.android-debug-keystore-host:/root/.android
+    command: ["tail", "-f", "/dev/null"]

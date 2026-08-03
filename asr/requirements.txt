@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+faster-whisper==1.1.1
+ctranslate2==4.5.0
+transformers==4.47.1
+# torch is installed separately in the Dockerfile from the CPU-only wheel
+# index -- the default PyPI package bundles CUDA and is ~10x larger, useless
+# for this CPU-only sidecar.

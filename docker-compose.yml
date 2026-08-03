@@ -1,0 +1,136 @@
+services:
+  traefik:
+    image: traefik:v3.5
+    command:
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --api.insecure=true
+    ports:
+      - "80:80"
+      - "8080:8080" # Traefik dashboard (dev only)
+    volumes:
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic/dynamic.yml:ro
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Synora.Api/Dockerfile
+    env_file:
+      - .env
+    environment:
+      ConnectionStrings__Postgres: "Host=postgres;Database=synora;Username=synora;Password=${POSTGRES_PASSWORD:-synora_dev}"
+      Avatar__StoragePath: "/data/avatars"
+      # Any OpenAI-compatible chat-completions backend works (DeepSeek direct
+      # by default; set LLM_BASE_URL/LLM_MODEL to switch, e.g. to OpenRouter:
+      # LLM_BASE_URL=https://openrouter.ai/api/v1, LLM_MODEL=deepseek/deepseek-chat).
+      Llm__BaseUrl: ${LLM_BASE_URL:-https://api.deepseek.com}
+      Llm__Model: ${LLM_MODEL:-deepseek-chat}
+      Llm__ApiKey: ${LLM_API_KEY:-}
+      Mqtt__Host: mosquitto
+      Mqtt__Port: 1883
+      Mqtt__Username: ${MQTT_USERNAME:-synora_device}
+      Mqtt__Password: ${MQTT_PASSWORD:-synora_mqtt_dev}
+      Asr__BaseUrl: http://asr:8000
+      Tts__BaseUrl: http://tts:8000
+    volumes:
+      - ./server/data/avatars:/data/avatars
+    depends_on:
+      - postgres
+      - mosquitto
+      - asr
+      - tts
+
+  asr:
+    build:
+      context: ./asr
+    volumes:
+      # Model weights (several hundred MB, converted to CTranslate2 on first
+      # startup -- see entrypoint.sh) persist here across restarts/rebuilds.
+      - synora-asr-models:/models
+      # Pre-downloaded vinai/PhoWhisper-small checkpoint (host-side download,
+      # see asr/download_model.py) -- the in-container download of this same
+      # checkpoint stalled completely partway through (a silent hang, not
+      # just slow), matching this environment's known CDN-egress issue with
+      # large files from inside containers. entrypoint.sh converts from this
+      # local copy instead of letting ct2-transformers-converter fetch it
+      # from HuggingFace itself.
+      - ./asr/model-src:/model-src:ro
+
+  tts:
+    build:
+      context: ./tts
+    environment:
+      # Points vieneu's own huggingface_hub calls at the bind-mounted,
+      # host-pre-downloaded cache below instead of hitting the network --
+      # see tts/download_vieneu_model.py for why (same in-container
+      # CDN-egress issue as asr/model-src).
+      HF_HUB_CACHE: /hf-cache
+    volumes:
+      - ./tts/vieneu-hf-cache:/hf-cache:ro
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:-synora_device}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-synora_mqtt_dev}
+    # The stock image's entrypoint just execs `mosquitto` -- overridden here
+    # so a mosquitto_passwd credentials file is (re)generated from
+    # MQTT_USERNAME/MQTT_PASSWORD on every start, before mosquitto itself
+    # starts. Dev/bench convenience over the "bake a fixed passwd file into
+    # the image/repo" alternative, at the cost of re-hashing on every
+    # container start (negligible cost, and the mounted mosquitto.conf below
+    # is read-only, not the whole /mosquitto/config directory, so writing the
+    # passwd file next to it still works).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+        chown mosquitto:mosquitto /mosquitto/config/passwd
+        chmod 0700 /mosquitto/config/passwd
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - synora-mosquitto-data:/mosquitto/data
+    ports:
+      - "1883:1883"
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_URL: /api
+    volumes:
+      - ./web/downloads:/usr/share/nginx/html/downloads
+    depends_on:
+      - server
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    # Remotely-managed tunnel (token-based) -- ingress rules (which public
+    # hostname maps to which local address, e.g. synora.carcise.dev ->
+    # http://traefik:80) live in the Cloudflare dashboard for this tunnel,
+    # not in a local config.yml. This lets the already-installed phone app
+    # (hardcoded to https://synora.carcise.dev/api, see app/lib/api_client.dart)
+    # reach this locally-run stack without any app rebuild.
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - traefik
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: synora
+      POSTGRES_USER: synora
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synora_dev}
+    volumes:
+      - synora-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  synora-postgres-data:
+  synora-mosquitto-data:
+  synora-asr-models:

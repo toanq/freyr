@@ -1,0 +1,46 @@
+http:
+  routers:
+    api:
+      rule: "PathPrefix(`/api`)"
+      entryPoints:
+        - web
+      service: api
+      priority: 10
+      middlewares:
+        - api-stripprefix
+    mqtt:
+      rule: "PathPrefix(`/mqtt`)"
+      entryPoints:
+        - web
+      service: mqtt
+      priority: 10
+    web:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - web
+      service: web
+      priority: 1
+
+  middlewares:
+    api-stripprefix:
+      stripPrefix:
+        prefixes:
+          - /api
+
+  services:
+    api:
+      loadBalancer:
+        servers:
+          - url: "http://server:8080"
+    mqtt:
+      # Mosquitto's websockets listener (mosquitto.conf) doesn't do its own
+      # path routing -- no stripPrefix needed, Traefik just proxies the
+      # WebSocket upgrade through as-is (standard Traefik behavior, no
+      # special config required for WS).
+      loadBalancer:
+        servers:
+          - url: "http://mosquitto:9001"
+    web:
+      loadBalancer:
+        servers:
+          - url: "http://web:80"

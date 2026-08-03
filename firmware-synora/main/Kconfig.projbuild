@@ -1,0 +1,30 @@
+menu "Synora"
+
+    config SYNORA_MQTT_BROKER_URI
+        string "MQTT broker URI (device<->server link)"
+        default "wss://synora.carcise.dev/mqtt"
+        help
+            Real hardware on the public internet can't resolve
+            docker-compose's "mosquitto" service name or reach its port 1883
+            directly, so this rides MQTT-over-WebSocket through the same
+            Traefik+Cloudflare HTTPS path already used for the REST API
+            (mosquitto.conf's websockets listener, traefik/dynamic.yml's
+            "mqtt" router) rather than needing separate raw-TCP exposure.
+            Shared static credentials for now (see SYNORA_MQTT_USERNAME/
+            PASSWORD below) -- per-device MQTT credentials are a future
+            hardening item, matching the BLE always-on control path's own
+            pending LE Secure Connections TODO.
+
+    config SYNORA_MQTT_USERNAME
+        string "MQTT username"
+        default "synora_device"
+
+    config SYNORA_MQTT_PASSWORD
+        string "MQTT password"
+        default ""
+        help
+            Must match docker-compose.yml's MQTT_PASSWORD env var. Left empty
+            by default on purpose -- set via `idf.py menuconfig` or a
+            sdkconfig.local override, never committed.
+
+endmenu

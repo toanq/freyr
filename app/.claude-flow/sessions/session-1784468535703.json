@@ -1,0 +1,14 @@
+{
+  "id": "session-1784468535703",
+  "startedAt": "2026-07-19T13:42:15.703Z",
+  "cwd": "/home/toan/bench/toan/synora/app",
+  "context": {},
+  "metrics": {
+    "edits": 71,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "endedAt": "2026-07-20T17:32:07.633Z",
+  "duration": 100191930
+}

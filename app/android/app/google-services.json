@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "29407187609",
+    "project_id": "synora-72221",
+    "storage_bucket": "synora-72221.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:29407187609:android:7107b8a4f4d08332fd1e08",
+        "android_client_info": {
+          "package_name": "com.synora.smartpot"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC4EaUhBJqLL_ldBoYZhmVTWi4Mc6dEYBs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

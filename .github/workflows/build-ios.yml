@@ -1,0 +1,68 @@
+name: Build iOS App
+
+# Builds the Flutter app (app/) for iOS, unsigned, and packages it as an
+# unsigned .ipa for sideloading (e.g. via Sideloadly, which re-signs the .ipa
+# itself using your own Apple ID at install time -- so CI never needs real
+# Apple Developer certs/provisioning profiles for this use case). Requires a
+# self-hosted runner on macOS with Xcode + CocoaPods already installed --
+# iOS builds can't run on GitHub-hosted Linux/Windows runners.
+#
+# This does NOT produce something uploadable to TestFlight/the App Store --
+# that needs real code signing (Apple Developer cert + provisioning profile,
+# likely via fastlane match or manual secrets), a separate follow-up.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/build-ios.yml"
+  pull_request:
+    paths:
+      - "app/**"
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    # GitHub auto-assigns these three labels to a self-hosted Apple Silicon
+    # macOS runner (Settings -> Actions -> Runners shows the exact set) --
+    # adjust if yours differ.
+    runs-on: [self-hosted, macOS, ARM64]
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: pod install
+        run: pod install --repo-update
+        working-directory: app/ios
+
+      - name: flutter build ios (unsigned)
+        run: flutter build ios --release --no-codesign
+
+      # flutter build ipa requires real export-signing config, which this
+      # repo doesn't have -- pack the unsigned .app into a standard IPA
+      # (Payload/Runner.app, zipped) by hand instead. This is exactly the
+      # .ipa shape Sideloadly/AltStore expect as input.
+      - name: Package unsigned .ipa
+        run: |
+          set -e
+          rm -rf Payload
+          mkdir Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          rm -f build/ios/iphoneos/Runner.ipa
+          zip -r build/ios/iphoneos/Runner.ipa Payload
+          rm -rf Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Runner-unsigned-ipa
+          path: app/build/ios/iphoneos/Runner.ipa
+          if-no-files-found: error

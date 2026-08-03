@@ -1,0 +1,33 @@
+## IDF Component Manager manifest for Synora firmware.
+## Dependencies are added incrementally per build-out phase so each phase
+## stays independently buildable.
+dependencies:
+  idf:
+    version: ">=5.5.2"
+
+  ## --- Phase 1 (audio DSP: pull, do not fork) ---
+  espressif/esp-sr: ~2.4.6              # AFE (AEC/NS/VAD) + WakeNet
+  # espressif/esp_audio_effects: ~1.3.0 # rate conversion -- not needed (input/output both 16kHz, see config.h)
+  # espressif/esp_codec_dev: ~1.5.6
+
+  ## --- Phase 2 (device<->server link -- moved to MQTT ahead of the WS/HTTP
+  ## protocol client originally planned here, per the 2026-08-01 decision) ---
+  espressif/mqtt: ~1.0.0                   # esp-mqtt; telemetry/commands/voice topics (started early, see FEAT.md)
+  espressif/esp_audio_codec: ~2.5.0        # Opus encode/decode for the voice session (started early, see FEAT.md)
+
+  ## --- Phase 3 (board peripherals) ---
+  espressif/button: ~4.2.0                # BOOT-button factory reset (started early, see FEAT.md)
+  78/esp-wifi-connect: ~3.2.2              # MIT; WifiManager/WifiStation/SsidManager for BLE provisioning (started early, see FEAT.md)
+  saleca/vl53l1x_uld_esp_wrapper: ^0.0.6  # water-level ToF sensor (VL53L1X, not L0X -- see project_synora_board memory).
+                                           # v0.0.6's vl53l1x.h is missing an extern "C" guard, breaking the link from
+                                           # our .cc files -- patch it locally after fetch (see vl53l1x_water_level_sensor.cc);
+                                           # `idf.py fullclean` silently reverts the patch, same as the wifi-connect one below.
+  # espressif/led_strip: ~3.0.2
+
+  ## --- Phase 4 (display/UI) ---
+  ## ST7793 240x400, 8-bit parallel/I80. No ESP-IDF component exists for
+  ## ST7793 (checked the registry); synora_display.cc drives it with a
+  ## hand-rolled register-level init ported from the vendor's own ST7793
+  ## reference driver, using esp_lcd_panel_io directly.
+  # lvgl/lvgl: ~9.5.0
+  # esp_lvgl_port: ~2.8.0

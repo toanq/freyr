@@ -1,0 +1,292 @@
+.login {
+  max-width: 32rem;
+  margin: 4rem auto;
+  padding: 0 1.5rem;
+  font-family: system-ui, sans-serif;
+  text-align: center;
+}
+
+.shell {
+  max-width: 48rem;
+  margin: 2rem auto;
+  padding: 0 1.5rem;
+  font-family: system-ui, sans-serif;
+}
+
+.shell-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-bottom: 1px solid #d1d5db;
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.shell-user {
+  margin-right: auto;
+  color: #6b7280;
+}
+
+.dashboard,
+.users,
+.devices,
+.admin-test,
+.system-config {
+  text-align: left;
+}
+
+.users form,
+.devices form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.users table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.users th,
+.users td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.devices ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.devices li {
+  padding: 0.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.375rem;
+}
+
+.device-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.device-row span {
+  color: #6b7280;
+  margin-right: auto;
+}
+
+.device-owner {
+  font-weight: 600;
+  color: #374151 !important;
+}
+
+.device-mac {
+  font-family: monospace;
+  font-size: 0.85em;
+}
+
+.device-online-dot {
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  margin-right: 0 !important;
+  flex: none;
+}
+
+.device-online-dot.online {
+  background: #22c55e;
+}
+
+.device-online-dot.offline {
+  background: #d1d5db;
+}
+
+.device-xiaozhi-code {
+  font-family: monospace;
+  font-size: 0.85em;
+  color: #374151 !important;
+}
+
+.telemetry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin: 0.5rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #e5e7eb;
+}
+
+.telemetry div {
+  display: flex;
+  flex-direction: column;
+}
+
+.telemetry dt {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.telemetry dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.telemetry-timestamp dd {
+  font-weight: 400;
+  color: #6b7280;
+}
+
+.telemetry--empty {
+  margin: 0.5rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #e5e7eb;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.discussions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0 0;
+  border-top: 1px dashed #e5e7eb;
+  list-style: none;
+}
+
+.discussion-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem;
+  background: #f9fafb;
+  border-radius: 0.375rem;
+}
+
+.discussion-turn p {
+  margin: 0;
+}
+
+.discussion-user {
+  color: #6b7280;
+}
+
+.discussion-user::before {
+  content: 'You: ';
+  font-weight: 600;
+}
+
+.discussion-assistant::before {
+  content: 'Synora: ';
+  font-weight: 600;
+}
+
+.discussion-timestamp {
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+
+.discussions--empty {
+  margin: 0.5rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #e5e7eb;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.form-error {
+  color: #dc2626;
+}
+
+.login form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.login label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: left;
+}
+
+.login input {
+  padding: 0.5rem;
+  font-size: 1rem;
+}
+
+.login button {
+  padding: 0.5rem;
+  font-size: 1rem;
+}
+
+.login-error {
+  color: #dc2626;
+}
+
+.health--ok {
+  color: #16a34a;
+}
+
+.health--error {
+  color: #dc2626;
+}
+
+.health--loading {
+  color: #6b7280;
+}
+
+.admin-test-device-picker {
+  display: block;
+  margin-bottom: 1rem;
+}
+
+.admin-test-section {
+  padding: 0.75rem 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.375rem;
+  margin-bottom: 1rem;
+}
+
+.admin-test-section h3 {
+  margin-top: 0;
+}
+
+.admin-test-hint {
+  color: #6b7280;
+  font-size: 0.9rem;
+  margin-top: -0.25rem;
+}
+
+.admin-test-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.admin-test-row input[type='number'] {
+  width: 5rem;
+}
+
+.admin-test-result {
+  color: #6b7280;
+}
+
+.admin-test-result--success {
+  color: #16a34a;
+}
+
+.admin-test-audio {
+  display: block;
+  margin-top: 0.5rem;
+  width: 100%;
+  max-width: 320px;
+}

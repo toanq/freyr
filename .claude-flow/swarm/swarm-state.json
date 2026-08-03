@@ -1,0 +1,24 @@
+{
+  "swarms": {
+    "swarm-1784369893630-mb5vpd": {
+      "swarmId": "swarm-1784369893630-mb5vpd",
+      "topology": "hierarchical",
+      "maxAgents": 15,
+      "status": "running",
+      "agents": [],
+      "tasks": [],
+      "config": {
+        "topology": "hierarchical",
+        "maxAgents": 15,
+        "strategy": "specialized",
+        "communicationProtocol": "message-bus",
+        "autoScaling": true,
+        "consensusMechanism": "majority"
+      },
+      "createdAt": "2026-07-18T10:18:13.630Z",
+      "updatedAt": "2026-07-18T10:18:13.630Z",
+      "pid": 32957
+    }
+  },
+  "version": "3.0.0"
+}

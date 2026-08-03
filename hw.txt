@@ -1,0 +1,17 @@
+front:
+ - tft
+ - mic
+ - speaker
+ - dht11
+ - battery 18650 2p
+ - touch sensor
+ - soil sensor
+water tank:
+ - pump
+ - water level sensor on the top
+back:
+ - charging circuit
+
+
+
+ warning if running out of batt
