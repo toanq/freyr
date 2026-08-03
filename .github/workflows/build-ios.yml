@@ -38,6 +38,37 @@ jobs:
         with:
           channel: stable
 
+      # Flutter needs a FULL Xcode, not just the Command Line Tools. This
+      # runner had `xcode-select -p` pointing at /Library/Developer/
+      # CommandLineTools, which has no `xcodebuild` -- and Flutter degrades
+      # silently rather than loudly in that state. Both symptoms we chased
+      # trace back here: it skips writing ios/Podfile (-> "No `Podfile'
+      # found") and it can't resolve the bundle identifier (-> "Application
+      # not configured for iOS"), because each needs `xcodebuild
+      # -showBuildSettings`.
+      #
+      # DEVELOPER_DIR overrides the xcode-select choice for this job only, so
+      # we can point at Xcode without sudo on the machine-wide setting.
+      - name: Ensure a full Xcode is selected
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEVELOPER_DIR:-}" ]; then
+            for xcode_app in /Applications/Xcode*.app; do
+              if [ -x "$xcode_app/Contents/Developer/usr/bin/xcodebuild" ]; then
+                export DEVELOPER_DIR="$xcode_app/Contents/Developer"
+                echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+                break
+              fi
+            done
+          fi
+
+          if ! xcodebuild -version; then
+            echo "Xcode apps present: $(ls -d /Applications/Xcode*.app 2>/dev/null || echo none)"
+            echo "::error::No usable Xcode on this self-hosted runner (xcode-select -p = $(xcode-select -p)). Install Xcode from the App Store, then run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer && sudo xcodebuild -runFirstLaunch"
+            exit 1
+          fi
+
       - name: flutter pub get
         run: flutter pub get
 
