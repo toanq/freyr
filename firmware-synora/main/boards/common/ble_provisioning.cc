@@ -515,11 +515,17 @@ void BleProvisioning::ConnectAndActivate() {
     // normally a no-op.
     WifiManager::GetInstance().StartStation();
 
-    // Force an immediate scan so the station's own scan-done handler picks up
-    // the SSID HandleCommit() just added to SsidManager and connects right
-    // away, instead of waiting on the periodic scan timer's exponential
-    // backoff.
-    esp_wifi_scan_start(nullptr, false);
+    // Explicit connect (WifiManager::ConnectToKnownNetwork -- part of this
+    // component's local patch, see wifi_manager.h's doc comment, added
+    // specifically for this call site) instead of forcing a scan and hoping
+    // the station's own ambient scan-driven auto-reconnect state machine
+    // picks up the credential HandleCommit() just added to SsidManager: that
+    // ad-hoc path depends on scan-result matching and whatever
+    // connect_queue_/backoff state the background reconnect logic happens to
+    // be in at this exact moment, which was the likely source of "sometimes
+    // just doesn't connect during pairing" even with correct credentials.
+    // ConnectToKnownNetwork() resets that state and connects directly.
+    WifiManager::GetInstance().ConnectToKnownNetwork(pending_ssid_, pending_password_);
 
     constexpr int kConnectTimeoutSec = 30;
     for (int waited = 0; waited < kConnectTimeoutSec && !WifiManager::GetInstance().IsConnected(); ++waited) {

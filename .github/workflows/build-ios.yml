@@ -4,8 +4,9 @@ name: Build iOS App
 # unsigned .ipa for sideloading (e.g. via Sideloadly, which re-signs the .ipa
 # itself using your own Apple ID at install time -- so CI never needs real
 # Apple Developer certs/provisioning profiles for this use case). Requires a
-# self-hosted runner on macOS with Xcode + CocoaPods already installed --
-# iOS builds can't run on GitHub-hosted Linux/Windows runners.
+# self-hosted runner on macOS with Xcode + Homebrew already installed --
+# iOS builds can't run on GitHub-hosted Linux/Windows runners. CocoaPods
+# itself is installed by the workflow if missing (see that step below).
 #
 # This does NOT produce something uploadable to TestFlight/the App Store --
 # that needs real code signing (Apple Developer cert + provisioning profile,
@@ -39,6 +40,51 @@ jobs:
 
       - name: flutter pub get
         run: flutter pub get
+
+      # Self-hosted runners are BYO-toolchain: nothing is pre-provisioned, and
+      # a fresh Mac has no `pod`. Two things bite here:
+      #
+      #  1. PATH. Actions runs each step in a non-login, non-interactive shell,
+      #     which does NOT source ~/.zprofile -- where Homebrew's `shellenv`
+      #     line normally lives. So even with Homebrew installed, `brew` (and
+      #     therefore `pod`) can be missing from PATH. We source shellenv
+      #     explicitly. Apple Silicon puts Homebrew in /opt/homebrew, not the
+      #     Intel /usr/local -- we try both so the workflow isn't arch-locked.
+      #  2. Install method. Do NOT use `sudo gem install cocoapods`: macOS
+      #     system Ruby is deprecated, read-only (Gem::FilePermissionError),
+      #     and its ffi build is unreliable on arm64. `brew install cocoapods`
+      #     is the recommended route on Apple Silicon -- it ships a
+      #     self-contained Ruby and needs no sudo.
+      #
+      # ASSUMPTION: Homebrew is already installed on the runner. We fail loudly
+      # rather than bootstrapping it, since installing Homebrew needs sudo and
+      # is a one-time machine-setup task, not a per-build one.
+      - name: Ensure CocoaPods is installed
+        run: |
+          set -euo pipefail
+
+          if ! command -v brew >/dev/null 2>&1; then
+            for brew_bin in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              if [ -x "$brew_bin" ]; then
+                eval "$("$brew_bin" shellenv)"
+                break
+              fi
+            done
+          fi
+
+          if ! command -v brew >/dev/null 2>&1; then
+            echo "::error::Homebrew not found on this self-hosted runner. Install it (https://brew.sh) and re-run."
+            exit 1
+          fi
+
+          # Persist Homebrew's bin dir for every later step in this job.
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+          if command -v pod >/dev/null 2>&1; then
+            echo "CocoaPods already present: $(pod --version)"
+          else
+            brew install cocoapods
+          fi
 
       - name: pod install
         run: pod install --repo-update
