@@ -93,6 +93,14 @@ jobs:
       # does not reliably do. `--config-only` does exactly that generation and
       # then stops short of xcodebuild, so the `pod install` below has a
       # Podfile to work from (previously it hit "No `Podfile' found").
+      - name: DEBUG (temporary)
+        run: |
+          echo "--- pwd/ls ---"; pwd; ls -la; echo "--- ios/ ---"; ls -la ios/ || true
+          echo "--- xcode-select ---"; xcode-select -p || true
+          echo "--- xcodebuild ---"; xcodebuild -version || true
+          echo "--- flutter doctor ---"; flutter doctor -v || true
+          echo "--- config-only verbose ---"; flutter build ios --config-only --release --no-codesign -v || true
+
       - name: Generate iOS platform config (writes ios/Podfile)
         run: flutter build ios --config-only --release --no-codesign
 
