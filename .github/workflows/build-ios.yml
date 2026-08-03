@@ -49,6 +49,15 @@ jobs:
       #
       # DEVELOPER_DIR overrides the xcode-select choice for this job only, so
       # we can point at Xcode without sudo on the machine-wide setting.
+      # Second gap, same spirit: Xcode 15+ ships WITHOUT platform SDKs, so a
+      # freshly installed Xcode can run `xcodebuild -version` yet still have
+      # no iOS platform. That surfaces late and confusingly, as "Unable to
+      # find a destination matching { generic:1, platform:iOS }" with
+      # "iOS <ver> is not installed" buried in the ineligible-destination
+      # list. Checking for the iphoneos SDK up front turns that into a
+      # one-line fix. Like Homebrew and Xcode above, we tell rather than
+      # install: it's a multi-GB one-time machine-setup download, not
+      # something to re-run every build.
       - name: Ensure a full Xcode is selected
         run: |
           set -euo pipefail
@@ -66,6 +75,11 @@ jobs:
           if ! xcodebuild -version; then
             echo "Xcode apps present: $(ls -d /Applications/Xcode*.app 2>/dev/null || echo none)"
             echo "::error::No usable Xcode on this self-hosted runner (xcode-select -p = $(xcode-select -p)). Install Xcode from the App Store, then run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer && sudo xcodebuild -runFirstLaunch"
+            exit 1
+          fi
+
+          if ! xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1; then
+            echo "::error::Xcode is installed but its iOS platform SDK is not. On the runner run: sudo xcodebuild -downloadPlatform iOS"
             exit 1
           fi
 
