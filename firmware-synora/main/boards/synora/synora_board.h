@@ -8,6 +8,8 @@
 
 #include <driver/i2c_master.h>
 #include <esp_event.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 
 #include "boards/common/button.h"
 #include "dashboard_status.h"
@@ -76,11 +78,13 @@ private:
     void InitializeVoiceButton();
     void InitializeSensors();
     void InitializeCommandHandlers();
+    void InitializeCommandQueues();
     void InitializeMcpTools();
     void InitializeWifiStatusTracking();
     void InitializeDnsFallback();
     void FactoryReset();
     void HandleWaterCommand(const std::string& payload);
+    void HandlePingCommand();
 
     // Called every TelemetryTask tick -- resumes BLE advertising
     // (BleProvisioning::Init(), already idempotent) once WiFi has been down
@@ -90,13 +94,27 @@ private:
     // and SynoraMqtt::ApplyIsPaired().
     void CheckWifiLossRecovery();
 
-    // Shared between the MQTT commands/water|ping handlers and the
-    // self.do_watering/self.find_device MCP tools -- see InitializeMcpTools().
-    void WaterFor(int duration_seconds);
+    // Shared between the MQTT commands/water|ping handlers (via the queues
+    // below) and the self.do_watering/self.find_device MCP tools -- see
+    // InitializeMcpTools(). WaterFor() returns the actual (clamped) seconds
+    // the pump will run, 0 if the request was ignored -- WaterQueueTask()
+    // uses this to know how long to wait before dispatching the next queued
+    // request, MCP/WateringScheduler callers ignore it.
+    int WaterFor(int duration_seconds);
     void TriggerFindMe();
 
     static void TelemetryTask(void* arg);
     static void OnGotIp(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
+
+    // Sequential dispatch for commands/water|ping: a command arriving while
+    // a previous one is still physically running (pump pulse / LED blink)
+    // is queued rather than dropped or made to overlap/restart the current
+    // one, so a burst of distinct requests all still eventually run, in
+    // order, one at a time.
+    static void WaterQueueTask(void* arg);
+    static void PingQueueTask(void* arg);
+    QueueHandle_t water_queue_ = nullptr;  // holds int durationSeconds
+    QueueHandle_t ping_queue_ = nullptr;   // holds a dummy uint8_t marker
 
     Button boot_button_;
 

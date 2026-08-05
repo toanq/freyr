@@ -19,6 +19,12 @@ public:
     // visibly signaling, there's nothing more to show.
     void Blink(int times);
 
+    // For a queued caller (see SynoraBoard's ping command queue) that wants
+    // to wait for the current pattern to finish before triggering the next
+    // one, rather than relying on Blink()'s own "drop if already blinking"
+    // behavior above.
+    bool IsBlinking() const { return blinking_.load(); }
+
     LedIndicator(const LedIndicator&) = delete;
     LedIndicator& operator=(const LedIndicator&) = delete;
 

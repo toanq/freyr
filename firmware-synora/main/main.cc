@@ -6,6 +6,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <cassert>
 #include <vector>
 
 #include "audio/codecs/no_audio_codec.h"
@@ -16,6 +17,9 @@
 #include "boards/synora/test_console.h"
 
 #define TAG "synora"
+
+// See app_main()'s xTaskCreateStatic() call below for why this is PSRAM-backed.
+constexpr size_t kAudioInputTaskStackSize = 4096 * 8;
 
 // Feeds every chunk read from the mic to both consumers: the AFE engine
 // (wake-word detection, always) and the voice session (Opus-encode + publish
@@ -88,5 +92,24 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Wake-word detection enabled; say the wake word.");
 
     static auto ctx = std::make_pair(&codec, &engine);
-    xTaskCreate(AudioInputTask, "audio_input", 4096, &ctx, 5, nullptr);
+    // 4096 overflowed within seconds of the first "Listening" (confirmed
+    // live: ESP-IDF's own stack-overflow detector caught it cleanly on one
+    // boot, and on another boot the same overflow corrupted a return address
+    // first, showing up as a LoadProhibited panic instead). Bumping to 16384
+    // (still internal RAM, via plain xTaskCreate) wasn't enough either --
+    // confirmed live, identical backtrace, same overflow -- engine->Feed()'s
+    // call into the closed-source esp-sr AFE library's own feed() apparently
+    // costs far more stack than a plain buffer copy should. Following the
+    // same fix already proven in this file for a comparable esp-sr-adjacent
+    // task (see EncodeWakeWordData()'s wake_word_encode_task_, stack_size =
+    // 4096*6): allocate the stack from PSRAM instead of guessing at further
+    // internal-RAM increments -- there's 8MB of it and only ~226KiB of
+    // internal RAM free at boot, so this is the headroom to spend generously
+    // from, not increment into starvation.
+    static StackType_t* audio_input_task_stack = static_cast<StackType_t*>(
+        heap_caps_malloc(kAudioInputTaskStackSize, MALLOC_CAP_SPIRAM));
+    static StaticTask_t audio_input_task_buffer;
+    assert(audio_input_task_stack != nullptr);
+    xTaskCreateStatic(AudioInputTask, "audio_input", kAudioInputTaskStackSize, &ctx, 5,
+                       audio_input_task_stack, &audio_input_task_buffer);
 }

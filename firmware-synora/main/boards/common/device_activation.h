@@ -23,7 +23,11 @@ public:
 
     // Best-effort POST to `{server_url}/devices/{device_id}/unlink`, clearing
     // the device's owner on the server so it becomes claimable again. No-op
-    // if never activated (no device_id_ yet).
+    // if never activated (no device_id_ yet). Also clears is_paired_ locally
+    // (via SetPaired(false)) -- this is the actual "become unpaired" action,
+    // unlike Reset() below. Both of its own callers (SynoraBoard's
+    // BOOT-button hold, BleProvisioning's control:factory_reset) reboot
+    // right after calling this.
     void Unlink();
 
     // Clears device_id_/activation_code_/server_url_ (in-memory and NVS) so
@@ -32,17 +36,19 @@ public:
     // row can become orphaned (e.g. deleted server-side) with no way for the
     // device to detect that on its own. Called by the "hold to unpair"
     // button gesture right after Unlink(), since a stale local id is useless
-    // once the server side is unlinked/gone anyway.
+    // once the server side is unlinked/gone anyway -- but also by
+    // BleProvisioning::ConnectAndActivate()/HandleReactivate(), which don't
+    // reboot and don't want to unpair, so this deliberately leaves
+    // is_paired_ untouched (see Unlink() above for that).
     void Reset();
 
     // Server-confirmed pairing state, persisted to NVS so it survives a
     // reboot -- lets SynoraBoard's constructor skip bringing BLE up at all
     // for a returning already-paired device, instead of Init()ing it every
     // boot only to Deinit() it again moments later once SynoraMqtt hears the
-    // retained state confirm it. Set by SynoraMqtt::ApplyIsPaired(), read at
-    // boot right after Load(). Implicitly cleared back to false by Reset()'s
-    // EraseAll() (same NVS namespace), so an unpair always leaves the next
-    // boot free to bring BLE up again.
+    // retained state confirm it. Set by SynoraMqtt::ApplyIsPaired() (server
+    // confirming pairing/unpairing) and by Unlink() (the local-initiated
+    // unpair action) -- NOT by Reset(), which leaves this alone on purpose.
     bool IsPaired() const { return is_paired_; }
     void SetPaired(bool paired);
 

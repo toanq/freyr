@@ -45,6 +45,16 @@ public:
     // NTP, no RTC yet). SynoraBoard wires this to WateringScheduler::ApplyServerTime.
     void SetTimeUpdateCallback(std::function<void(int64_t unix_time_ms)> callback);
 
+    // Fires once EnsureStarted() has actually resolved a real device_id_ and
+    // started the client -- i.e. NOT on the no-op call a not-yet-paired
+    // device's constructor makes first. SynoraBoard wires this to
+    // InitializeCommandHandlers(), whose commands/water|ping Subscribe()
+    // calls otherwise get permanently bound to an empty-device-id topic if
+    // registered (as they used to be) only once, right after that first
+    // no-op call -- confirmed live: the server-published command never
+    // matched the device's subscribed topic, silently, no error either side.
+    void SetDeviceReadyCallback(std::function<void()> callback);
+
     // Server-side mute toggle (Device.Muted, admin/app-controlled), from the
     // retained `state` topic's `muted` field -- see HandleState(). Read by
     // SynoraBoard::IsMuted() for the dashboard's header speaker icon.
@@ -77,4 +87,5 @@ private:
     std::map<std::string, std::function<void(const std::string&)>> subscriptions_;
     std::function<void(const std::string&)> schedules_update_callback_;
     std::function<void(int64_t)> time_update_callback_;
+    std::function<void()> device_ready_callback_;
 };

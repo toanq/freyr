@@ -84,7 +84,15 @@ public sealed class McpBridge
         }
         if (_pending.TryRemove(PendingKey(deviceId, idEl.GetInt32()), out var tcs))
         {
-            tcs.TrySetResult(payload);
+            // Clone -- payload's backing JsonDocument is disposed the moment
+            // VoiceMqttDispatcher.HandleControlAsync's `using (doc)` block
+            // returns, but the TCS is awaited from a different async flow
+            // (DiscoverToolsAsync, running as a background task) that
+            // resumes later, after that disposal. Confirmed live: without
+            // this, IsSuccess() on the awaited result threw
+            // ObjectDisposedException("JsonDocument") every time, silently
+            // aborting MCP tool discovery for every session.
+            tcs.TrySetResult(payload.Clone());
         }
     }
 

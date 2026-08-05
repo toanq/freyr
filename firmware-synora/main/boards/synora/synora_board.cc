@@ -45,6 +45,18 @@ SynoraBoard::SynoraBoard()
     // at all, and it looked like a DNS problem until a full boot log showed
     // no "Connecting to WiFi"/"Got IP" lines ever appearing.
     WifiManager::GetInstance().StartStation();
+    // Never explicitly set before -- WiFi driver defaults to WIFI_PS_MIN_MODEM
+    // (confirmed live: boot log's "wifi:pm start, type: 1"), which combined
+    // with WifiStation's own listen_interval=10 (wakes only once per ~1s)
+    // made this device's MQTT connection drop and reconnect every 30-270s
+    // (confirmed live in mosquitto's broker log: repeated "session taken
+    // over"/"disconnected" for the same client, dozens of times over one
+    // session) -- long enough gaps for a non-retained commands/water|ping
+    // publish to silently miss the device entirely if it lands mid-drop.
+    // This is a voice assistant + IoT device that needs a persistent,
+    // low-latency connection for commands/voice, not a battery-sipping
+    // sensor -- full power is the right tradeoff here, not modem sleep.
+    WifiManager::GetInstance().SetPowerSaveLevel(WifiPowerSaveLevel::PERFORMANCE);
     InitializeWifiStatusTracking();
     InitializeDnsFallback();
 
@@ -71,12 +83,17 @@ SynoraBoard::SynoraBoard()
         [this](const std::string& schedules_json) { watering_scheduler_.ApplySchedulesFromServer(schedules_json); });
     SynoraMqtt::GetInstance().SetTimeUpdateCallback(
         [this](int64_t unix_time_ms) { watering_scheduler_.ApplyServerTime(unix_time_ms); });
+    // Queues must exist before this can fire (it may fire synchronously,
+    // below, for a returning already-activated device) -- created first.
+    InitializeCommandQueues();
+    SynoraMqtt::GetInstance().SetDeviceReadyCallback([this] { InitializeCommandHandlers(); });
 
-    // No-ops if this is a first boot before any pairing (no device id yet) --
-    // BleProvisioning::ConnectAndActivate() calls this again once activation
-    // succeeds. A returning, already-activated device starts MQTT right away.
+    // No-ops if this is a first boot before any pairing (no device id yet),
+    // in which case SetDeviceReadyCallback()'s callback above runs later
+    // instead, once BleProvisioning::ConnectAndActivate() calls this again
+    // and activation actually succeeds. A returning, already-activated
+    // device starts MQTT right away, firing the callback synchronously.
     SynoraMqtt::GetInstance().EnsureStarted();
-    InitializeCommandHandlers();
 
     InitializeSensors();
     InitializeMcpTools();
@@ -194,12 +211,26 @@ void SynoraBoard::InitializeCommandHandlers() {
         HandleWaterCommand(payload);
     });
     SynoraMqtt::GetInstance().Subscribe("commands/ping", [this](const std::string&) {
-        TriggerFindMe();
+        HandlePingCommand();
     });
 }
 
+// Queues + their worker tasks for commands/water|ping -- see the queue
+// fields' own doc comment in synora_board.h. Created once, up front (queue
+// length is tiny and fixed), regardless of pairing state, same as
+// InitializeCommandHandlers() itself.
+void SynoraBoard::InitializeCommandQueues() {
+    constexpr int kCommandQueueLength = 4;
+    water_queue_ = xQueueCreate(kCommandQueueLength, sizeof(int));
+    ping_queue_ = xQueueCreate(kCommandQueueLength, sizeof(uint8_t));
+    xTaskCreate(WaterQueueTask, "water_queue", 3072, this, 4, nullptr);
+    xTaskCreate(PingQueueTask, "ping_queue", 3072, this, 4, nullptr);
+}
+
 // Payload shape mirrors Synora.Api's PublishWaterCommandAsync exactly:
-// {"durationSeconds": <int>}.
+// {"durationSeconds": <int>}. Enqueues rather than running the pump directly
+// -- WaterQueueTask() is what actually calls WaterFor(), one request at a
+// time.
 void SynoraBoard::HandleWaterCommand(const std::string& payload) {
     cJSON* root = cJSON_Parse(payload.c_str());
     if (root == nullptr) {
@@ -207,28 +238,84 @@ void SynoraBoard::HandleWaterCommand(const std::string& payload) {
         return;
     }
     cJSON* duration = cJSON_GetObjectItem(root, "durationSeconds");
-    if (cJSON_IsNumber(duration)) {
-        WaterFor(duration->valueint);
-    } else {
+    if (!cJSON_IsNumber(duration)) {
         ESP_LOGW(TAG, "commands/water: missing/invalid durationSeconds");
+        cJSON_Delete(root);
+        return;
     }
+    int duration_seconds = duration->valueint;
     cJSON_Delete(root);
+
+    if (xQueueSend(water_queue_, &duration_seconds, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "commands/water: queue full, dropping request");
+    }
 }
 
-// Shared by HandleWaterCommand (MQTT commands/water) and the self.do_watering
+// Same enqueue shape as HandleWaterCommand() above, for the payload-less
+// ping command.
+void SynoraBoard::HandlePingCommand() {
+    uint8_t marker = 1;
+    if (xQueueSend(ping_queue_, &marker, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "commands/ping: queue full, dropping request");
+    }
+}
+
+// Shared by WaterQueueTask() (MQTT commands/water) and the self.do_watering
 // MCP tool -- both just need "run the pump for N seconds and mirror it on
 // the display", the safety clamp itself lives in PumpDriver::RunFor.
-void SynoraBoard::WaterFor(int duration_seconds) {
+int SynoraBoard::WaterFor(int duration_seconds) {
     int actual_seconds = pump_.RunFor(duration_seconds);
     if (actual_seconds > 0) {
         SynoraDisplay::GetInstance().ShowWatering(actual_seconds * 1000);
     }
+    return actual_seconds;
 }
 
-// Shared by the MQTT commands/ping handler and the self.find_device MCP tool.
+// Shared by PingQueueTask() (MQTT commands/ping) and the self.find_device MCP
+// tool.
 void SynoraBoard::TriggerFindMe() {
     find_me_led_.Blink(4);
     SynoraDisplay::GetInstance().ShowPing();
+}
+
+// Runs the whole life of the program, one water request at a time -- pops
+// the next queued duration only once the current pulse has actually
+// finished (WaterFor()'s own return value, the real clamped duration), so
+// two overlapping commands/water deliveries can never fight over the same
+// pump.
+void SynoraBoard::WaterQueueTask(void* arg) {
+    auto* self = static_cast<SynoraBoard*>(arg);
+    int duration_seconds;
+    while (true) {
+        if (xQueueReceive(self->water_queue_, &duration_seconds, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        int actual_seconds = self->WaterFor(duration_seconds);
+        if (actual_seconds > 0) {
+            vTaskDelay(pdMS_TO_TICKS(actual_seconds * 1000));
+        }
+    }
+}
+
+// Same shape as WaterQueueTask() above, gated on LedIndicator::IsBlinking()
+// instead of a known duration (TriggerFindMe()'s blink pattern length isn't
+// exposed) -- kMaxWaitMs is just a safety net in case that flag ever gets
+// stuck, well past the real ~2.4s pattern (4 blinks).
+void SynoraBoard::PingQueueTask(void* arg) {
+    auto* self = static_cast<SynoraBoard*>(arg);
+    constexpr int kMaxWaitMs = 5000;
+    uint8_t marker;
+    while (true) {
+        if (xQueueReceive(self->ping_queue_, &marker, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        self->TriggerFindMe();
+        int waited_ms = 0;
+        while (self->find_me_led_.IsBlinking() && waited_ms < kMaxWaitMs) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            waited_ms += 100;
+        }
+    }
 }
 
 // Registers the device's MCP tools (see mcp_server.h) -- discovered by the

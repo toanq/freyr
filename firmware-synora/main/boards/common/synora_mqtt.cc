@@ -8,6 +8,7 @@
 #include <cJSON.h>
 #include <esp_crt_bundle.h>
 #include <esp_log.h>
+#include <esp_system.h>
 
 #include <utility>
 
@@ -20,6 +21,25 @@ SynoraMqtt& SynoraMqtt::GetInstance() {
 
 void SynoraMqtt::EnsureStarted() {
     if (started_) {
+        // Every subscription's full topic string was resolved against
+        // device_id_ at the time Subscribe() was called (see DeviceTopic()
+        // below) -- if the device has since been re-activated to a
+        // genuinely different server-side id (e.g. re-paired after being
+        // deleted server-side, all without an intervening reboot), this
+        // already-running client has no way to re-scope itself: it stays
+        // subscribed to the OLD id's topics forever, including "state", so
+        // it can never receive the retained isPaired:true that would
+        // otherwise confirm the fresh pairing. Reboot for a clean slate
+        // rather than silently getting stuck showing the pairing screen
+        // despite the server correctly considering the device paired --
+        // confirmed live: this exact mismatch left a device paired
+        // server-side but stuck on the TFT's pairing screen indefinitely.
+        std::string current_device_id = DeviceActivation::GetInstance().GetDeviceId();
+        if (!current_device_id.empty() && current_device_id != device_id_) {
+            ESP_LOGW(TAG, "device_id changed (%s -> %s) after MQTT already started -- restarting for a clean slate",
+                     device_id_.c_str(), current_device_id.c_str());
+            esp_restart();
+        }
         return;
     }
     device_id_ = DeviceActivation::GetInstance().GetDeviceId();
@@ -59,6 +79,12 @@ void SynoraMqtt::EnsureStarted() {
     Subscribe("voice/audio/down", [](const std::string& payload) {
         SynoraVoiceSession::GetInstance().OnAudioDown(payload);
     });
+
+    // Only reached once device_id_ is real -- see SetDeviceReadyCallback()'s
+    // doc comment for why this can't just run unconditionally at boot.
+    if (device_ready_callback_) {
+        device_ready_callback_();
+    }
 }
 
 // Turns BLE off once the server confirms pairing (POST /devices/pair ->
@@ -118,6 +144,10 @@ void SynoraMqtt::SetSchedulesUpdateCallback(std::function<void(const std::string
 
 void SynoraMqtt::SetTimeUpdateCallback(std::function<void(int64_t)> callback) {
     time_update_callback_ = std::move(callback);
+}
+
+void SynoraMqtt::SetDeviceReadyCallback(std::function<void()> callback) {
+    device_ready_callback_ = std::move(callback);
 }
 
 void SynoraMqtt::Publish(const std::string& topic_suffix, const std::string& payload, int qos, bool retain) {

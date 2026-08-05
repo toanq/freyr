@@ -79,6 +79,16 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
   // found" rather than "still scanning."
   bool _initialWifiScanDone = false;
 
+  // Bumped by _cancelAndRestart() to invalidate whatever _submitWifi()/
+  // _pairWithCode()/_reactivateAndRetryPair() call is currently in flight --
+  // those only apply a setState() if their own captured generation still
+  // matches this, so a stale awaited BLE/HTTP response from a cancelled
+  // attempt can't clobber the UI after the user has already moved on. Cheap
+  // cancellation-by-ignoring rather than a true cancellation token: the
+  // orphaned call keeps running in the background (harmlessly) until its own
+  // timeout/completion, silently, instead of being forcibly torn down.
+  int _submitGeneration = 0;
+
   @override
   void initState() {
     super.initState();
@@ -394,8 +404,27 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
     }
   }
 
+  // True if this attempt has been superseded (cancelled, or another attempt
+  // started) since it began -- see _submitGeneration's own doc comment.
+  bool _isStale(int myGeneration) => !mounted || myGeneration != _submitGeneration;
+
+  // "Hủy" on the joining/activating screens -- those steps otherwise have no
+  // way out except waiting out their own 120s timeouts. Bumping
+  // _submitGeneration makes every setState() in the in-flight
+  // _submitWifi()/_pairWithCode()/_reactivateAndRetryPair() call a no-op from
+  // here on, so jumping straight back to the Wi-Fi form is safe even though
+  // that old call is still technically running in the background.
+  void _cancelAndRestart() {
+    setState(() {
+      _submitGeneration++;
+      _step = _Step.wifiForm;
+      _error = null;
+    });
+  }
+
   Future<void> _submitWifi() async {
     if (!mounted) return;
+    final myGeneration = ++_submitGeneration;
     setState(() => _step = _Step.joining);
     try {
       final services = await _device!.discoverServices();
@@ -442,8 +471,20 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       final onlineOrError = Completer<String>();
       final activatedOrError = Completer<String>();
       void handleStatus(String s) {
-        if (!onlineOrError.isCompleted && (s == 'online' || s == 'error')) {
-          onlineOrError.complete(s);
+        // 'activated' also resolves onlineOrError, not just 'online'/'error'
+        // -- the device flips to 'online' right as it reconnects BLE after
+        // its own deliberate Wi-Fi-attempt disconnect (see
+        // ConnectAndActivate()'s comment), and that notification has a real
+        // chance of firing before this app's central has actually
+        // reconnected, with nobody subscribed to receive it. Reaching
+        // 'activated' is only possible after the device was online, so
+        // treat it as proof online already happened even if that specific
+        // notification got lost -- confirmed live: without this, a device
+        // that WiFi-connected in ~130ms and activated successfully still
+        // left the app stuck on onlineOrError's own 120s timeout, showing a
+        // misleading "Wi-Fi connect timeout" error.
+        if (!onlineOrError.isCompleted && (s == 'online' || s == 'activated' || s == 'error')) {
+          onlineOrError.complete(s == 'activated' ? 'online' : s);
         }
         if (!activatedOrError.isCompleted && (s == 'activated' || s == 'error')) {
           activatedOrError.complete(s);
@@ -478,9 +519,9 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       try {
         final wifiStatus = await onlineOrError.future
             .timeout(const Duration(seconds: 120), onTimeout: () => 'timeout');
+        if (_isStale(myGeneration)) return;
 
         if (wifiStatus != 'online') {
-          if (!mounted) return;
           setState(() {
             _step = _Step.error;
             _error = wifiStatus == 'timeout'
@@ -490,14 +531,13 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
           return;
         }
 
-        if (!mounted) return;
         setState(() => _step = _Step.activating);
 
         final finalStatus = await activatedOrError.future
             .timeout(const Duration(seconds: 120), onTimeout: () => 'timeout');
+        if (_isStale(myGeneration)) return;
 
         if (finalStatus != 'activated') {
-          if (!mounted) return;
           setState(() {
             _step = _Step.error;
             _error = finalStatus == 'timeout'
@@ -511,6 +551,8 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
         await reconnectSub.cancel();
       }
 
+      if (_isStale(myGeneration)) return;
+
       // Re-discovered fresh (not reusing the `chars` map from before the
       // wait above) -- the device may have disconnected/reconnected during
       // that wait (see reconnectSub's own comment), and characteristic
@@ -523,8 +565,8 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       final activationChar = finalChars[SynoraBleUuids.activation]!;
       final code = String.fromCharCodes(await activationChar.read());
       debugPrint('SYNORA_DEBUG: activation code read from BLE: "$code"');
+      if (_isStale(myGeneration)) return;
       if (code.isEmpty) {
-        if (!mounted) return;
         setState(() {
           _step = _Step.error;
           _error = 'Thiết bị chưa gửi mã kích hoạt.';
@@ -547,9 +589,9 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
         // Non-fatal.
       }
 
-      await _pairWithCode(code, macAddress);
+      await _pairWithCode(code, macAddress, myGeneration);
     } catch (e) {
-      if (!mounted) return;
+      if (_isStale(myGeneration)) return;
       setState(() {
         _step = _Step.error;
         _error = e is ApiException && e.statusCode == 409 ? _kAlreadyPairedMessage : e.toString();
@@ -557,7 +599,7 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
     }
   }
 
-  Future<void> _pairWithCode(String code, String? macAddress) async {
+  Future<void> _pairWithCode(String code, String? macAddress, int myGeneration) async {
     debugPrint('SYNORA_DEBUG: pairing with code="$code" mac=$macAddress');
     try {
       await ref.read(apiClientProvider).pairDevice(code, macAddress: macAddress);
@@ -566,7 +608,7 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       // route gets popped) -- this way the list refreshes the moment pairing
       // actually succeeds, regardless of navigation timing afterward.
       widget.onPaired?.call();
-      if (!mounted) return;
+      if (_isStale(myGeneration)) return;
       setState(() => _step = _Step.done);
       // Auto-return to the device list. Give the user a moment to read the
       // success message first.
@@ -580,14 +622,14 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
         // exists server-side (e.g. deleted via the web admin console) --
         // ask the device to mint a fresh one on the spot and retry, instead
         // of a dead-end error that used to require a full factory reset.
-        await _reactivateAndRetryPair(macAddress);
+        await _reactivateAndRetryPair(macAddress, myGeneration);
         return;
       }
       rethrow;
     }
   }
 
-  Future<void> _reactivateAndRetryPair(String? macAddress) async {
+  Future<void> _reactivateAndRetryPair(String? macAddress, int myGeneration) async {
     try {
       final services = await _device!.discoverServices();
       final service = services.firstWhere((s) => s.uuid == SynoraBleUuids.service);
@@ -601,8 +643,8 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
 
       final bytes = await nextCode.timeout(const Duration(seconds: 15));
       final freshCode = String.fromCharCodes(bytes);
+      if (_isStale(myGeneration)) return;
       if (freshCode.isEmpty) {
-        if (!mounted) return;
         setState(() {
           _step = _Step.error;
           _error = 'Thiết bị không thể lấy mã kích hoạt mới.';
@@ -615,13 +657,13 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       // code, so surface it as an error instead of looping forever.
       await ref.read(apiClientProvider).pairDevice(freshCode, macAddress: macAddress);
       widget.onPaired?.call();
-      if (!mounted) return;
+      if (_isStale(myGeneration)) return;
       setState(() => _step = _Step.done);
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) Navigator.of(context).pop();
       });
     } catch (e) {
-      if (!mounted) return;
+      if (_isStale(myGeneration)) return;
       setState(() {
         _step = _Step.error;
         _error = e is ApiException && e.statusCode == 409 ? _kAlreadyPairedMessage : e.toString();
@@ -796,8 +838,8 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
                       ),
                     ],
                   ),
-            _Step.joining => const Center(child: Text('Thiết bị đang kết nối với mạng Wi-Fi…')),
-            _Step.activating => const Center(child: Text('Đang xác nhận thiết bị…')),
+            _Step.joining => _buildWaitingView('Thiết bị đang kết nối với mạng Wi-Fi…'),
+            _Step.activating => _buildWaitingView('Đang xác nhận thiết bị…'),
             _Step.done => Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -837,6 +879,29 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
               ),
           },
         ),
+      ),
+    );
+  }
+
+  // Shared by _Step.joining/_Step.activating -- both are just a spinner +
+  // status text with no interaction otherwise, so without this a device that
+  // reboots mid-flow (e.g. an OTA/firmware reflash landing right in this
+  // window) orphans the in-flight request and leaves the user stuck staring
+  // at this for up to 120s with no way to just start over sooner.
+  Widget _buildWaitingView(String message) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text(message, textAlign: TextAlign.center),
+          const SizedBox(height: 24),
+          OutlinedButton(
+            onPressed: _cancelAndRestart,
+            child: const Text('Hủy'),
+          ),
+        ],
       ),
     );
   }

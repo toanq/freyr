@@ -149,11 +149,18 @@ void DeviceActivation::Unlink() {
     if (device_id_.empty()) {
         return;
     }
+    // This is the actual "become unpaired" action -- Reset() (below) no
+    // longer touches is_paired_ itself, since 2 of its 4 call sites
+    // (ConnectAndActivate()/HandleReactivate()) don't reboot and were never
+    // meant to unpair. Both of Unlink()'s own callers (SynoraBoard's
+    // BOOT-button hold, BleProvisioning's control:factory_reset) do reboot
+    // right after, so clearing it here is safe/final rather than leaving a
+    // window where local state says unpaired but nothing forced a fresh
+    // retained-state redelivery to confirm it either way.
+    SetPaired(false);
     SynoraMqtt::GetInstance().EnsureStarted();
     SynoraMqtt::GetInstance().Publish("unlink", "{}");
-    // Both callers (SynoraBoard's BOOT-button hold, BleProvisioning's
-    // control:factory_reset) immediately follow this with esp_restart() --
-    // unlike the old HTTP POST (blocking until the response arrived), a QoS
+    // Unlike the old HTTP POST (blocking until the response arrived), a QoS
     // 1 MQTT publish only enqueues the message; give the client task a
     // moment to actually hand it to the TCP stack before the reboot cuts the
     // connection.
@@ -165,10 +172,22 @@ void DeviceActivation::Reset() {
     device_id_.clear();
     activation_code_.clear();
     server_url_.clear();
-    is_paired_ = false; // Moot in practice -- both callers reboot right after this.
 
+    // Deliberately leaves is_paired_/the persisted "is_paired" key alone --
+    // this is called from ConnectAndActivate()/HandleReactivate() too
+    // (neither reboots afterward), not just HandleFactoryReset() (which
+    // does). Clearing it here used to locally "unpair" an already-paired
+    // device the moment either of those non-rebooting callers ran (e.g. a
+    // stray/duplicate BLE commit arriving after pairing already succeeded),
+    // with no reboot or fresh MQTT subscribe to re-deliver the retained
+    // isPaired:true and correct it -- the TFT would keep showing the pairing
+    // screen indefinitely despite the server still correctly considering the
+    // device paired. Actual unpair is Unlink()'s job, and its only two
+    // callers both esp_restart() right after.
     Settings settings(kSettingsNamespace, true);
-    settings.EraseAll(); // Also wipes the persisted is_paired key -- see IsPaired()'s doc comment.
+    settings.EraseKey("device_id");
+    settings.EraseKey("activation_code");
+    settings.EraseKey("server_url");
 }
 
 void DeviceActivation::SetPaired(bool paired) {

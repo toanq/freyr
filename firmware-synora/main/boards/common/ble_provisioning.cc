@@ -68,6 +68,14 @@ namespace {
 // access callbacks run on NimBLE's own host task, and several of these
 // handlers block for seconds (Wi-Fi connect, HTTP activation, a full scan),
 // which would otherwise stall the BLE host.
+//
+// 8192, not 4096 -- ConnectAndActivate() (the heaviest fn scheduled here)
+// runs DeviceActivation::TryActivate()'s HTTPS POST on this exact task,
+// which means an mbedtls TLS handshake against esp_crt_bundle's full CA
+// list, plus cJSON parsing, on top of everything else this task also does
+// (WifiManager/SynoraDisplay calls, BLE GAP/GATT ops). 4096 wasn't enough --
+// confirmed live: "A stack overflow in task ble_prov_task has been
+// detected" during the activation POST, crashing the whole device mid-pair.
 void ScheduleOnTask(std::function<void()> fn) {
     auto* heap_fn = new std::function<void()>(std::move(fn));
     xTaskCreate(
@@ -77,7 +85,7 @@ void ScheduleOnTask(std::function<void()> fn) {
             delete heap_fn;
             vTaskDelete(nullptr);
         },
-        "ble_prov_task", 4096, heap_fn, 5, nullptr);
+        "ble_prov_task", 8192, heap_fn, 5, nullptr);
 }
 
 // Copies an mbuf chain into a std::string. Shared by every write-type access callback.

@@ -692,10 +692,20 @@ devicesGroup.MapPost("/activation", async (SynoraDbContext db, ActivateDeviceReq
     }
     while (await db.Devices.AnyAsync(d => d.ActivationCode == code));
 
+    // Normalized (uppercase) before every compare/store below -- the
+    // firmware's own POST here sends lowercase (GetMacAddressString()'s
+    // snprintf format), while the app's /pair request below sends whatever
+    // it read off the BLE deviceInfo characteristic uppercased. Comparing
+    // raw strings let a device's own re-activation silently miss its
+    // already-paired row (case mismatch) and create a brand-new,
+    // never-actually-linked duplicate instead -- confirmed live, this
+    // produced two rows for the same physical MAC within one test session.
+    var normalizedMac = NormalizeMac(request.MacAddress);
+
     Device? device = null;
-    if (!string.IsNullOrEmpty(request.MacAddress))
+    if (!string.IsNullOrEmpty(normalizedMac))
     {
-        device = await db.Devices.FirstOrDefaultAsync(d => d.MacAddress == request.MacAddress);
+        device = await db.Devices.FirstOrDefaultAsync(d => d.MacAddress == normalizedMac);
     }
 
     if (device is not null)
@@ -720,9 +730,9 @@ devicesGroup.MapPost("/activation", async (SynoraDbContext db, ActivateDeviceReq
     {
         device = new Device
         {
-            Name = DeviceSerial(request.MacAddress) is string serial ? $"Synora-{serial}" : "New device",
+            Name = DeviceSerial(normalizedMac) is string serial ? $"Synora-{serial}" : "New device",
             ActivationCode = code,
-            MacAddress = request.MacAddress,
+            MacAddress = normalizedMac,
             CreatedAt = DateTimeOffset.UtcNow,
         };
         db.Devices.Add(device);
@@ -731,6 +741,8 @@ devicesGroup.MapPost("/activation", async (SynoraDbContext db, ActivateDeviceReq
 
     return Results.Ok(new { deviceId = device.Id, activationCode = code });
 });
+
+static string? NormalizeMac(string? mac) => string.IsNullOrEmpty(mac) ? mac : mac.ToUpperInvariant();
 
 // Matches the firmware's own Synora-XXXX BLE/AP naming (last 2 MAC bytes, 4
 // hex chars) so the same physical device is identifiable the same way
@@ -769,10 +781,15 @@ devicesGroup.MapPost("/pair", async (SynoraDbContext db, HttpContext http, IDevi
     device.PairedAt = DateTimeOffset.UtcNow;
     // Defensive fallback -- normally already set by /devices/activation, but
     // this backfills it for rows activated before that existed, or if the
-    // activation call's MAC somehow didn't make it through.
-    if (!string.IsNullOrEmpty(request.MacAddress))
+    // activation call's MAC somehow didn't make it through. Normalized the
+    // same way as /devices/activation above -- otherwise this (app-sourced,
+    // uppercased) write overwrites the device's own lowercase MAC and breaks
+    // that endpoint's exact-match dedup lookup on the device's next
+    // reactivation.
+    var normalizedMac = NormalizeMac(request.MacAddress);
+    if (!string.IsNullOrEmpty(normalizedMac))
     {
-        device.MacAddress = request.MacAddress;
+        device.MacAddress = normalizedMac;
     }
     await db.SaveChangesAsync();
     // isPaired flipped -- refresh the retained state topic so the device
@@ -1055,6 +1072,15 @@ devicesGroup.MapPatch("/{id:guid}/alerts", async (Guid id, SynoraDbContext db, H
     return Results.Ok();
 }).RequireAuthorization();
 
+// Despite the route/verb, this UNPAIRS rather than deletes the row -- a
+// physical device that's ever activated should always stay visible
+// somewhere in the system (to admins, via GET /devices' isAdmin branch
+// returning every row regardless of owner), ready to be re-paired by anyone
+// later, rather than disappearing along with its telemetry/schedule
+// history. The regular user still loses it from their own device list the
+// instant OwnerUserId clears (GET /devices' non-admin branch filters on
+// that), which is the actual user-facing effect "delete" needs to have --
+// there's just no server-side row deletion behind it anymore.
 devicesGroup.MapDelete("/{id:guid}", async (Guid id, SynoraDbContext db, HttpContext http, IDeviceMqttPublisher mqtt) =>
 {
     var isAdmin = http.User.IsInRole(nameof(UserRole.Admin)) || http.User.IsInRole(nameof(UserRole.SuperAdmin));
@@ -1065,6 +1091,9 @@ devicesGroup.MapDelete("/{id:guid}", async (Guid id, SynoraDbContext db, HttpCon
         return Results.NotFound();
     }
 
+    // Clears the previous owner's personalization -- a device sitting
+    // unpaired/re-pairable in the system shouldn't keep showing whoever had
+    // it last's chosen photo.
     if (device.AvatarPath is not null)
     {
         var avatarPath = Path.Combine(avatarStoragePath, device.AvatarPath);
@@ -1072,21 +1101,34 @@ devicesGroup.MapDelete("/{id:guid}", async (Guid id, SynoraDbContext db, HttpCon
         {
             File.Delete(avatarPath);
         }
+        device.AvatarPath = null;
     }
 
-    // Tell the device it's unpaired BEFORE the row disappears -- PublishStateAsync
-    // re-reads the device from the DB to build the payload, so this has to happen
-    // while the row still exists but with OwnerUserId already cleared. Without
-    // this, deleting a device here left the firmware still showing the dashboard
-    // (isPaired cached true client-side) with no way back to the pairing screen
-    // short of a factory reset.
+    // Same reasoning as the avatar above -- the watering schedule and
+    // low-water alert configuration are the previous owner's settings, not
+    // something a new owner pairing this same physical device later should
+    // inherit. Deleted/reset here (not just left for the next owner to
+    // notice and change) since PublishStateAsync below re-reads schedules
+    // fresh from the DB -- doing this first means the retained state the
+    // device (and BLE deviceInfo) picks up already reflects "no schedules"
+    // instead of a stale list belonging to someone else.
+    var oldSchedules = await db.WateringSchedules.Where(s => s.DeviceId == id).ToListAsync();
+    db.WateringSchedules.RemoveRange(oldSchedules);
+    device.LowWaterWarningThresholdPercent = null;
+    device.LowWaterCriticalThresholdPercent = null;
+    device.LowWaterAlertIntervalMinutes = null;
+    device.LowWaterLastAlertedAt = null;
+
     device.OwnerUserId = null;
     device.PairedAt = null;
     await db.SaveChangesAsync();
+    // Tells the device it's unpaired -- PublishStateAsync re-reads the
+    // device from the DB to build the payload, so this has to happen after
+    // OwnerUserId actually clears. Without this, "deleting" a device here
+    // left the firmware still showing the dashboard (isPaired cached true
+    // client-side) with no way back to the pairing screen short of a
+    // factory reset.
     await mqtt.PublishStateAsync(id);
-
-    db.Devices.Remove(device);
-    await db.SaveChangesAsync();
     return Results.Ok();
 }).RequireAuthorization();
 
