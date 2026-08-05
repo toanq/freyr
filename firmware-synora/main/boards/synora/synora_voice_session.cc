@@ -109,7 +109,7 @@ void SynoraVoiceSession::Toggle() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (listening_) {
         StopListening();
-    } else {
+    } else if (!SynoraMqtt::GetInstance().IsMuted()) {
         StartListening(/*is_relisten=*/false);
     }
 }
@@ -148,6 +148,15 @@ void SynoraVoiceSession::FeedMic(const std::vector<int16_t>& pcm) {
     if (!listening_ || opus_encoder_ == nullptr) {
         return;
     }
+    if (SynoraMqtt::GetInstance().IsMuted()) {
+        // Muted mid-turn (server toggle raced the button click) -- cancel
+        // right away rather than waiting out the silence timeout below;
+        // dropped mic audio would hit that same timeout eventually, but
+        // there's no reason to wait once we already know why it's silent.
+        ESP_LOGI(TAG, "Muted mid-session -- cancelling locally");
+        CancelListeningLocally();
+        return;
+    }
     float level = ComputeAudioLevel(pcm.data(), pcm.size());
     SynoraDisplay::GetInstance().SetAudioLevel(level);
 
@@ -160,12 +169,9 @@ void SynoraVoiceSession::FeedMic(const std::vector<int16_t>& pcm) {
         // reply nobody asked for. Not StopListening(): that sets kTalking
         // and expects a reply, which is exactly what this is trying to
         // avoid.
-        listening_ = false;
-        SynoraMqtt::GetInstance().Publish("voice/control/up", BuildListenMessage(/*start=*/false), 1);
-        SynoraDisplay::GetInstance().SetState(EyesState::kIdle);
-        SynoraDisplay::GetInstance().SetAudioLevel(0.0f);
         ESP_LOGI(TAG, "No speech within %lld ms (relisten=%d), cancelling", static_cast<long long>(timeout_ms),
                  is_relisten_);
+        CancelListeningLocally();
         return;
     }
 
@@ -174,6 +180,17 @@ void SynoraVoiceSession::FeedMic(const std::vector<int16_t>& pcm) {
         EncodeAndPublish(pcm_accum_.data(), encoder_frame_samples_);
         pcm_accum_.erase(pcm_accum_.begin(), pcm_accum_.begin() + encoder_frame_samples_);
     }
+}
+
+// mutex_ already held by the caller (FeedMic()) -- ends a turn with no
+// server round-trip expected (unlike StopListening(), which sets kTalking
+// and awaits a reply). Shared by the silence timeout and the mute-mid-turn
+// case above.
+void SynoraVoiceSession::CancelListeningLocally() {
+    listening_ = false;
+    SynoraMqtt::GetInstance().Publish("voice/control/up", BuildListenMessage(/*start=*/false), 1);
+    SynoraDisplay::GetInstance().SetState(EyesState::kIdle);
+    SynoraDisplay::GetInstance().SetAudioLevel(0.0f);
 }
 
 // mutex_ already held by the caller (FeedMic()).
@@ -200,9 +217,11 @@ void SynoraVoiceSession::OnControlDown(const std::string& payload) {
         // continue across multiple turns without another button press.
         // FeedMic()'s silence timeout (kRelistenSilenceTimeoutMs) is what
         // actually falls back to idle, if the user doesn't say anything
-        // this time.
+        // this time. Skipped while muted -- same reasoning as Toggle().
         std::lock_guard<std::mutex> lock(mutex_);
-        StartListening(/*is_relisten=*/true);
+        if (!SynoraMqtt::GetInstance().IsMuted()) {
+            StartListening(/*is_relisten=*/true);
+        }
     } else if (IsMcpMessage(payload)) {
         // The server's MCP bridge (initialize/tools/list/tools/call) --
         // unwrap the outer {"type":"mcp","payload":{...}} envelope and hand
@@ -222,7 +241,12 @@ void SynoraVoiceSession::OnControlDown(const std::string& payload) {
 }
 
 void SynoraVoiceSession::OnAudioDown(const std::string& payload) {
-    if (opus_decoder_ == nullptr || codec_ == nullptr) {
+    // Muted: drop the reply instead of writing it to the speaker. Checked
+    // here rather than by disabling the codec's output channel -- toggling
+    // i2s_channel_disable() while NoAudioCodec::Write() might already be
+    // mid-flight on another chunk would trip its ESP_ERROR_CHECK; skipping
+    // the write call entirely sidesteps that race.
+    if (opus_decoder_ == nullptr || codec_ == nullptr || SynoraMqtt::GetInstance().IsMuted()) {
         return;
     }
     esp_audio_dec_in_raw_t raw = {};

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <string>
 
 #include <esp_err.h>
 #include <esp_lcd_panel_io.h>
@@ -33,6 +34,7 @@ enum class DisplayScreen {
     kFontTest,
     kWatering,
     kPing,
+    kConnectingWifi,
 };
 
 // Drives the ST7793 display (config.h's DISPLAY_* pins) with a simple
@@ -86,6 +88,15 @@ public:
     // SynoraBoard's "commands/ping" handler alongside find_me_led_.Blink().
     void ShowPing();
 
+    // Shows "Connecting to Wi-Fi <ssid>" -- called from BleProvisioning::
+    // ConnectAndActivate() right before it attempts the actual Wi-Fi
+    // connect, so the TFT gives feedback during the (up to 30s) attempt
+    // instead of just sitting on the pairing screen. No fixed duration
+    // (unlike ShowWatering/ShowPing) -- ClearConnectingToWifi() ends it once
+    // that attempt resolves either way.
+    void ShowConnectingToWifi(const std::string& ssid);
+    void ClearConnectingToWifi();
+
     SynoraDisplay(const SynoraDisplay&) = delete;
     SynoraDisplay& operator=(const SynoraDisplay&) = delete;
 
@@ -107,6 +118,8 @@ private:
                                 const char* const* hint_lines, int hint_line_count);
     void DrawPairingScreen();
     void DrawWifiLostScreen();
+    void DrawConnectingWifiScreen();
+    void DrawBootLogoScreen();
     void DrawDashboardScreen();
     void DrawSensorTile(int cx, int cy, TileStatus status, const char* label, const char* value,
                         void (SynoraDisplay::*draw_icon)(int, int, uint16_t));
@@ -114,7 +127,8 @@ private:
     void DrawDropIcon(int cx, int cy, uint16_t color);
     void DrawWindIcon(int cx, int cy, uint16_t color);
     void DrawWaveIcon(int cx, int cy, uint16_t color);
-    void DrawWifiStatusIcon(int x, int baseline_y, uint16_t color);
+    void DrawWifiStatusIcon(int x, int baseline_y, TileStatus status);
+    void DrawMuteStatusIcon(int x, int baseline_y, bool muted);
     void DrawFontTestScreen();
     void DrawWateringScreen(int frame, float remaining_fraction);
     void RandomizeWateringDrops();
@@ -132,6 +146,11 @@ private:
     std::mutex state_mutex_;
     EyesState state_ = EyesState::kIdle;
     std::atomic<bool> font_test_active_ = false;
+    // Deadline, not a plain bool -- like watering_until_ms_/ping_until_ms_
+    // below, so this can never get stuck showing "Connecting..." forever if
+    // ClearConnectingToWifi() doesn't fire for some reason.
+    std::atomic<int64_t> connecting_wifi_until_ms_ = 0;
+    std::string connecting_ssid_;  // guarded by state_mutex_, like state_ above
     // Millisecond timestamps (esp_timer_get_time() / 1000 base, matching
     // AnimationTask's own clock) marking when each transient screen should
     // stop showing -- 0/expired means "not active". Plain int64_t atomics

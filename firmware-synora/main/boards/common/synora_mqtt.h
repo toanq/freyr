@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -44,6 +45,11 @@ public:
     // NTP, no RTC yet). SynoraBoard wires this to WateringScheduler::ApplyServerTime.
     void SetTimeUpdateCallback(std::function<void(int64_t unix_time_ms)> callback);
 
+    // Server-side mute toggle (Device.Muted, admin/app-controlled), from the
+    // retained `state` topic's `muted` field -- see HandleState(). Read by
+    // SynoraBoard::IsMuted() for the dashboard's header speaker icon.
+    bool IsMuted() const { return is_muted_.load(); }
+
     SynoraMqtt(const SynoraMqtt&) = delete;
     SynoraMqtt& operator=(const SynoraMqtt&) = delete;
 
@@ -58,10 +64,12 @@ private:
     void ApplyIsPaired(bool is_paired);
 
     // The internal "state" topic subscription's handler -- parses isPaired
-    // (always) and forwards schedules to schedules_update_callback_ (if set).
+    // and muted (always) and forwards schedules to schedules_update_callback_
+    // (if set).
     void HandleState(const std::string& payload);
 
     esp_mqtt_client_handle_t client_ = nullptr;
+    std::atomic<bool> is_muted_ = false;
     bool started_ = false;
     std::string device_id_;
 

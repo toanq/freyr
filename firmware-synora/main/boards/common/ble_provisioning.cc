@@ -9,6 +9,7 @@
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_app_desc.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -20,6 +21,7 @@
 #include <services/gap/ble_svc_gap.h>
 #include <services/gatt/ble_svc_gatt.h>
 
+#include "boards/synora/synora_display.h"
 #include "device_activation.h"
 #include "ssid_manager.h"
 #include "synora_mqtt.h"
@@ -501,6 +503,35 @@ void BleProvisioning::HandleCommit() {
 }
 
 void BleProvisioning::ConnectAndActivate() {
+    // Reject a second overlapping call (e.g. the phone retrying a commit
+    // before this attempt has resolved) -- see the member's own doc comment
+    // in ble_provisioning.h for why letting two runs interleave corrupts
+    // pairing rather than just wasting effort. But only within a generous
+    // bound: if the earlier run has been "in progress" longer than any of
+    // its own internal timeouts could legitimately take, treat it as wedged
+    // (most likely stuck in TryActivate()'s HTTP call -- DNS resolution
+    // isn't bounded by that call's own timeout_ms) and let this new commit
+    // through anyway, rather than requiring a reboot to pair again.
+    constexpr int64_t kWedgedThresholdMs = 60000;  // 30s Wi-Fi timeout + 10s HTTP timeout + margin
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    int64_t previous_start_ms = connect_and_activate_started_ms_.load();
+    if (previous_start_ms != 0) {
+        int64_t elapsed_ms = now_ms - previous_start_ms;
+        if (elapsed_ms < kWedgedThresholdMs) {
+            ESP_LOGW(TAG, "ConnectAndActivate already running for an earlier commit (%lld ms) -- ignoring this one",
+                     static_cast<long long>(elapsed_ms));
+            return;
+        }
+        ESP_LOGW(TAG, "Previous ConnectAndActivate looks wedged (%lld ms, likely a hung DNS/HTTP call) -- "
+                      "letting this new commit proceed anyway",
+                 static_cast<long long>(elapsed_ms));
+    }
+    connect_and_activate_started_ms_.store(now_ms);
+    struct InProgressGuard {
+        std::atomic<int64_t>& deadline;
+        ~InProgressGuard() { deadline.store(0); }
+    } in_progress_guard{connect_and_activate_started_ms_};
+
     // Drop the active BLE connection (if any) for the duration of the actual
     // Wi-Fi connect attempt below -- an active BLE central connection during
     // this exact window is enough Wi-Fi/BLE coexistence contention to make
@@ -528,12 +559,14 @@ void BleProvisioning::ConnectAndActivate() {
     // be in at this exact moment, which was the likely source of "sometimes
     // just doesn't connect during pairing" even with correct credentials.
     // ConnectToKnownNetwork() resets that state and connects directly.
+    SynoraDisplay::GetInstance().ShowConnectingToWifi(pending_ssid_);
     WifiManager::GetInstance().ConnectToKnownNetwork(pending_ssid_, pending_password_);
 
     constexpr int kConnectTimeoutSec = 30;
     for (int waited = 0; waited < kConnectTimeoutSec && !WifiManager::GetInstance().IsConnected(); ++waited) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+    SynoraDisplay::GetInstance().ClearConnectingToWifi();
 
     if (!WifiManager::GetInstance().IsConnected()) {
         ESP_LOGW(TAG, "Wi-Fi connect timed out during BLE provisioning");
@@ -628,17 +661,34 @@ void BleProvisioning::HandleRescan() {
         self.scan_cursor_ = 0; // Fresh scan restarts pagination from the top.
 
         // Scanning while still associated to an AP only gets a severely
-        // degraded result back from the driver -- disconnect first so this
-        // scan sees the whole picture. RevertToPreRescanNetworkIfNeeded()
-        // falls back to this network if the user's subsequent commit doesn't
-        // end up on a working one, or never happens.
-        if (WifiManager::GetInstance().IsConnected()) {
-            self.pre_rescan_ssid_ = WifiManager::GetInstance().GetSsid();
+        // degraded result back from the driver, and scanning while the
+        // background station is mid-reconnect (common right after a fresh
+        // boot, before this GATT callback even runs) is flatly rejected
+        // outright ("STA is connecting, scan are not allowed!" -- confirmed
+        // live, reproduces every time right after power-on). IsConnected()
+        // alone can't tell "mid-connect" from "disconnected" -- both read
+        // false -- so this calls Disconnect() unconditionally instead of
+        // gating it on IsConnected(): esp_wifi_disconnect() safely aborts an
+        // in-progress connect attempt too, not just a fully-connected
+        // session. Applied before EVERY attempt below (not just the first)
+        // since the station can finish its own reconnect in the gap before a
+        // retry, hitting the same degraded/rejected scan the first attempt
+        // was trying to avoid.
+        auto disconnect_and_scan = [](int scan_timeout_ms) {
+            auto& self = GetInstance();
+            if (self.pre_rescan_ssid_.empty()) {
+                // Only remember the very first pre-scan SSID, not whatever a
+                // retry finds mid-reconnect -- RevertToPreRescanNetworkIfNeeded()
+                // should fall back to what the user was actually on before this
+                // whole rescan started.
+                self.pre_rescan_ssid_ = WifiManager::GetInstance().GetSsid();
+            }
             WifiManager::GetInstance().Disconnect();
             vTaskDelay(pdMS_TO_TICKS(300));
-        }
+            return WifiManager::GetInstance().ScanAndWait(scan_timeout_ms);
+        };
 
-        if (!WifiManager::GetInstance().ScanAndWait(30000)) {
+        if (!disconnect_and_scan(30000)) {
             ESP_LOGW(TAG, "Rescan timed out waiting for SCAN_DONE");
         }
         // A scan landing 0 APs right after boot (or mid-reconnect) is usually
@@ -646,7 +696,7 @@ void BleProvisioning::HandleRescan() {
         // short window to settle and try again before serving an empty list.
         if (WifiManager::GetInstance().GetLastScanResults().empty()) {
             vTaskDelay(pdMS_TO_TICKS(2000));
-            if (!WifiManager::GetInstance().ScanAndWait(8000)) {
+            if (!disconnect_and_scan(8000)) {
                 ESP_LOGW(TAG, "Rescan retry timed out waiting for SCAN_DONE");
             }
         }

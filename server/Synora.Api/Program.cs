@@ -1055,7 +1055,7 @@ devicesGroup.MapPatch("/{id:guid}/alerts", async (Guid id, SynoraDbContext db, H
     return Results.Ok();
 }).RequireAuthorization();
 
-devicesGroup.MapDelete("/{id:guid}", async (Guid id, SynoraDbContext db, HttpContext http) =>
+devicesGroup.MapDelete("/{id:guid}", async (Guid id, SynoraDbContext db, HttpContext http, IDeviceMqttPublisher mqtt) =>
 {
     var isAdmin = http.User.IsInRole(nameof(UserRole.Admin)) || http.User.IsInRole(nameof(UserRole.SuperAdmin));
     var userId = CurrentUserId(http);
@@ -1073,6 +1073,17 @@ devicesGroup.MapDelete("/{id:guid}", async (Guid id, SynoraDbContext db, HttpCon
             File.Delete(avatarPath);
         }
     }
+
+    // Tell the device it's unpaired BEFORE the row disappears -- PublishStateAsync
+    // re-reads the device from the DB to build the payload, so this has to happen
+    // while the row still exists but with OwnerUserId already cleared. Without
+    // this, deleting a device here left the firmware still showing the dashboard
+    // (isPaired cached true client-side) with no way back to the pairing screen
+    // short of a factory reset.
+    device.OwnerUserId = null;
+    device.PairedAt = null;
+    await db.SaveChangesAsync();
+    await mqtt.PublishStateAsync(id);
 
     db.Devices.Remove(device);
     await db.SaveChangesAsync();

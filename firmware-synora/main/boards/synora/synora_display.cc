@@ -9,6 +9,7 @@
 #include "qr_download.h"
 #include "sensor_icons.h"
 #include "sensor_readings.h"
+#include "status_icons.h"
 #include "synora_board.h"
 #include "text_renderer.h"
 #include "watering_schedule.h"
@@ -76,6 +77,7 @@ constexpr int kBlinkIntervalMs = 3000; // how long eyes stay open between blinks
 constexpr int kBlinkDurationMs = 150;  // how long the closed/blink pose holds
 constexpr int kIdlePollMs = 200;       // how often the AnimationTask loop ticks
 constexpr int kDashboardRefreshMs = 4000; // how often the dashboard re-reads sensors + redraws
+constexpr int kBootLogoDurationMs = 1500; // how long the startup splash holds before Init() hands off
 
 // Pre-wrapped for the real Noto Sans metrics at these exact sizes (see
 // scripts/gen_font.py --preview) -- a generic runtime word-wrap isn't worth
@@ -127,6 +129,7 @@ constexpr int kHeaderLeafOffsetX = 14;  // gap from the title's right edge to th
 constexpr int kHeaderLogoTopY = 3;
 constexpr int kHeaderDividerY = 38;
 constexpr int kWifiIconX = 10;  // top-left corner, bottom-aligned with the title text baseline
+constexpr int kMuteIconX = 34;  // to the right of the WiFi icon (18px wide) plus a gap, same baseline
 
 // Hero: the current time, big -- kFontGlyphs64 is rasterized at its own
 // native 64px size (see scripts/gen_font.py's FONT_SIZES), not scaled up
@@ -276,9 +279,25 @@ esp_err_t SynoraDisplay::Init(SynoraBoard* board) {
         return err;
     }
 
+    DrawBootLogoScreen();
+    vTaskDelay(pdMS_TO_TICKS(kBootLogoDurationMs));
+
     DrawEyes(kEyeClosedRadiusY); // Closed/idle until something sets a different state.
     xTaskCreate(AnimationTask, "synora_eyes", 4096, this, 3, nullptr);
     return ESP_OK;
+}
+
+// Startup splash -- white background (every other screen is black; this one
+// is deliberately inverted to read as a clean brand moment) with the green
+// brand-mark logo (logo.svg, rasterized bigger than the header's kLogoIcon
+// by scripts/gen_logo.py) centered. One-shot, blocking: shown for
+// kBootLogoDurationMs before Init() hands off to AnimationTask's normal
+// screen logic, not part of the DisplayScreen/GetScreen() rotation.
+void SynoraDisplay::DrawBootLogoScreen() {
+    std::fill(framebuffer_, framebuffer_ + DISPLAY_WIDTH * DISPLAY_HEIGHT, static_cast<uint16_t>(0xFFFF));
+    BlitMonoBitmap((DISPLAY_WIDTH - kBootLogoWidth) / 2, (DISPLAY_HEIGHT - kBootLogoHeight) / 2, kBootLogoBitmap,
+                   kBootLogoWidth, kBootLogoHeight, kTileColorGood);
+    PushFramebuffer();
 }
 
 void SynoraDisplay::InitializeBus() {
@@ -469,34 +488,65 @@ void SynoraDisplay::DrawEyes(int ry) {
     PushFramebuffer();
 }
 
-// Shared by DrawPairingScreen()/DrawWifiLostScreen() -- both are a 3-line
-// title + 3-line hint + the same generic app-download QR, just with
-// different copy. title_line_count/hint_line_count must each be 3, matching
-// kPairingTitleBaselineY/kPairingHintBaselineY (the only baseline tables
-// that exist, since both current callers use exactly 3 lines each).
+// Shared by DrawPairingScreen()/DrawWifiLostScreen()/DrawConnectingWifiScreen().
+// With a hint (DrawWifiLostScreen: 3-line title + 3-line hint + the generic
+// app-download QR, title_line_count/hint_line_count matching
+// kPairingTitleBaselineY/kPairingHintBaselineY's fixed near-top placement),
+// title and hint sit above where the QR fills the rest of the screen. With
+// hint_line_count == 0 (DrawPairingScreen()/DrawConnectingWifiScreen() --
+// title only, no phone-pairing flow left to point at once a device is
+// unpaired, or mid-Wi-Fi-connect), the title block is vertically centered on
+// the panel instead, since there's nothing below it to lay out around.
 void SynoraDisplay::DrawPairingStyleScreen(const char* const* title_lines, int title_line_count,
                                            const char* const* hint_lines, int hint_line_count) {
     std::memset(framebuffer_, 0, DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t));
 
-    for (int i = 0; i < title_line_count; i++) {
-        int width = MeasureTextWidth(title_lines[i], kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
-        DrawText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, (DISPLAY_WIDTH - width) / 2, kPairingTitleBaselineY[i],
-                 title_lines[i], kTextColor, kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
+    if (hint_line_count > 0) {
+        for (int i = 0; i < title_line_count; i++) {
+            int width = MeasureTextWidth(title_lines[i], kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
+            DrawText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, (DISPLAY_WIDTH - width) / 2,
+                     kPairingTitleBaselineY[i], title_lines[i], kTextColor, kFontGlyphs24, kFontGlyphCount24,
+                     kFontLineHeight24);
+        }
+        for (int i = 0; i < hint_line_count; i++) {
+            int width = MeasureTextWidth(hint_lines[i], kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
+            DrawText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, (DISPLAY_WIDTH - width) / 2,
+                     kPairingHintBaselineY[i], hint_lines[i], kTextColor, kFontGlyphs18, kFontGlyphCount18,
+                     kFontLineHeight18);
+        }
+        BlitMonoBitmap((DISPLAY_WIDTH - kQrDownloadWidth) / 2, kQrTopY, kQrDownloadBitmap, kQrDownloadWidth,
+                       kQrDownloadHeight, kTextColor);
+    } else {
+        constexpr int kTitleLineSpacing = 30;  // matches kPairingTitleBaselineY's own step
+        int first_baseline = DISPLAY_HEIGHT / 2 - (title_line_count - 1) * kTitleLineSpacing / 2;
+        for (int i = 0; i < title_line_count; i++) {
+            int width = MeasureTextWidth(title_lines[i], kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
+            DrawText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, (DISPLAY_WIDTH - width) / 2,
+                     first_baseline + i * kTitleLineSpacing, title_lines[i], kTextColor, kFontGlyphs24,
+                     kFontGlyphCount24, kFontLineHeight24);
+        }
     }
-    for (int i = 0; i < hint_line_count; i++) {
-        int width = MeasureTextWidth(hint_lines[i], kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
-        DrawText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, (DISPLAY_WIDTH - width) / 2, kPairingHintBaselineY[i],
-                 hint_lines[i], kTextColor, kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
-    }
-    BlitMonoBitmap((DISPLAY_WIDTH - kQrDownloadWidth) / 2, kQrTopY, kQrDownloadBitmap, kQrDownloadWidth,
-                   kQrDownloadHeight, kTextColor);
 
     PushFramebuffer();
 }
 
 void SynoraDisplay::DrawPairingScreen() {
     DrawPairingStyleScreen(kPairingTitleLines, sizeof(kPairingTitleLines) / sizeof(kPairingTitleLines[0]),
-                           kPairingHintLines, sizeof(kPairingHintLines) / sizeof(kPairingHintLines[0]));
+                           nullptr, 0);
+}
+
+// Reuses DrawPairingStyleScreen's title-only layout (see DrawPairingScreen()
+// above) for a 2-line dynamic title instead of the usual static 3-line
+// array -- "title_line_count=2" only touches kPairingTitleBaselineY[0]/[1],
+// well within that array's bounds.
+void SynoraDisplay::DrawConnectingWifiScreen() {
+    std::string ssid;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        ssid = connecting_ssid_;
+    }
+    const char* title_lines[] = {"Đang kết nối WiFi", ssid.c_str()};
+    DrawPairingStyleScreen(title_lines, 2, nullptr, 0);
 }
 
 void SynoraDisplay::DrawWifiLostScreen() {
@@ -556,19 +606,44 @@ void SynoraDisplay::DrawWaveIcon(int cx, int cy, uint16_t /*color*/) {
                    kIconWaterLevelSize, kIconWaterLevelSize, kIconColorWaterLevel);
 }
 
-// Top-left header WiFi status icon: 3 ascending signal-strength bars (not a
-// wifi-arcs glyph -- plain FillRect bars stay legible at this small a size,
-// no new hollow-circle/arc primitive needed), bottom-aligned at baseline_y,
-// colored via TileColorForStatus(board_->GetWifiStatus()) so it reuses the
-// same green/amber/red semantics as the sensor tiles.
-void SynoraDisplay::DrawWifiStatusIcon(int x, int baseline_y, uint16_t color) {
-    constexpr int kBarWidth = 3;
-    constexpr int kBarGap = 2;
-    constexpr int kBarHeights[3] = {4, 7, 10};
-    for (int i = 0; i < 3; ++i) {
-        int bar_height = kBarHeights[i];
-        FillRect(x + i * (kBarWidth + kBarGap), baseline_y - bar_height, kBarWidth, bar_height, color);
+// Top-left header WiFi status icon -- real art (svgs/wifi*.svg, thresholded
+// to 1bpp by scripts/gen_status_icons.py), one glyph per TileStatus rather
+// than a single shape recolored: plain arcs for connected, arcs +
+// exclamation for scanning/connecting, arcs + slash for disconnected. Tinted
+// via TileColorForStatus so it still reuses the sensor tiles' green/amber/
+// red semantics. x/baseline_y is the glyph's left edge / bottom point,
+// matching the old hand-drawn bars' bottom-aligned placement.
+void SynoraDisplay::DrawWifiStatusIcon(int x, int baseline_y, TileStatus status) {
+    const uint8_t* bitmap;
+    switch (status) {
+        case TileStatus::kGood:
+            bitmap = kIconWifiGoodBitmap;
+            break;
+        case TileStatus::kWarn:
+            bitmap = kIconWifiWarnBitmap;
+            break;
+        default:  // kBad
+            bitmap = kIconWifiBadBitmap;
+            break;
     }
+    BlitMonoBitmap(x, baseline_y - kIconWifiGoodSize, bitmap, kIconWifiGoodSize, kIconWifiGoodSize,
+                   TileColorForStatus(status));
+}
+
+// Header speaker/mute icon -- same real-art approach as the WiFi icon above
+// (svgs/speaker-2.svg unmuted, svgs/speaker-cross.svg muted -- a genuinely
+// different glyph, not a slash overlaid on the same shape). muted is
+// server-driven (Device.Muted -- see MqttService.PublishStateAsync's
+// "muted" field, consumed by SynoraMqtt::HandleState -- and
+// SynoraBoard::IsMuted()); the glyph turns kTileColorBad instead of the
+// header's neutral white to make an unexpectedly-muted device obvious at a
+// glance, not just on close reading. x/baseline_y matches
+// DrawWifiStatusIcon's placement convention.
+void SynoraDisplay::DrawMuteStatusIcon(int x, int baseline_y, bool muted) {
+    const uint8_t* bitmap = muted ? kIconSpeakerMutedBitmap : kIconSpeakerUnmutedBitmap;
+    uint16_t color = muted ? kTileColorBad : kTextColor;
+    BlitMonoBitmap(x, baseline_y - kIconSpeakerUnmutedSize, bitmap, kIconSpeakerUnmutedSize, kIconSpeakerUnmutedSize,
+                   color);
 }
 
 // One dashboard tile: rounded-rect card in `status`'s color, an icon (drawn
@@ -607,7 +682,8 @@ void SynoraDisplay::DrawDashboardScreen() {
              kFontGlyphs24, kFontGlyphCount24, kFontLineHeight24);
     BlitMonoBitmap(header_left + header_width + kHeaderLeafOffsetX, kHeaderLogoTopY, kLogoIconBitmap, kLogoIconWidth,
                    kLogoIconHeight, kTileColorGood);
-    DrawWifiStatusIcon(kWifiIconX, kHeaderTitleBaselineY, TileColorForStatus(board_->GetWifiStatus()));
+    DrawWifiStatusIcon(kWifiIconX, kHeaderTitleBaselineY, board_->GetWifiStatus());
+    DrawMuteStatusIcon(kMuteIconX, kHeaderTitleBaselineY, board_->IsMuted());
     FillRect(0, kHeaderDividerY, DISPLAY_WIDTH, 1, kDividerColor);
 
     // Hero: the current time, big -- "--:--" until the server has ever
@@ -770,6 +846,24 @@ void SynoraDisplay::ShowPing() {
     ping_until_ms_.store(now_ms + kPingDurationMs);
 }
 
+void SynoraDisplay::ShowConnectingToWifi(const std::string& ssid) {
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        connecting_ssid_ = ssid;
+    }
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    // Comfortably longer than BleProvisioning::ConnectAndActivate()'s own
+    // 30s connect timeout -- this is a backstop, not the primary way this
+    // screen ends (ClearConnectingToWifi() below does that in the normal
+    // case), so it should never fire before that timeout would have.
+    constexpr int64_t kConnectingWifiMaxDurationMs = 35000;
+    connecting_wifi_until_ms_.store(now_ms + kConnectingWifiMaxDurationMs);
+}
+
+void SynoraDisplay::ClearConnectingToWifi() {
+    connecting_wifi_until_ms_.store(0);
+}
+
 EyesState SynoraDisplay::GetState() {
     std::lock_guard<std::mutex> lock(state_mutex_);
     return state_;
@@ -793,6 +887,9 @@ DisplayScreen SynoraDisplay::GetScreen() {
     }
     if (now_ms < ping_until_ms_.load()) {
         return DisplayScreen::kPing;
+    }
+    if (now_ms < connecting_wifi_until_ms_.load()) {
+        return DisplayScreen::kConnectingWifi;
     }
     if (GetState() != EyesState::kIdle) {
         return DisplayScreen::kEyes;
@@ -838,6 +935,10 @@ void SynoraDisplay::AnimationTask(void* arg) {
             float remaining =
                 std::clamp(static_cast<float>(self->ping_until_ms_.load() - now_ms) / kPingDurationMs, 0.0f, 1.0f);
             self->DrawPingScreen(remaining);
+        } else if (screen == DisplayScreen::kConnectingWifi) {
+            if (screen_changed) {
+                self->DrawConnectingWifiScreen();
+            }
         } else if (screen == DisplayScreen::kPairing) {
             if (screen_changed) {
                 self->DrawPairingScreen();

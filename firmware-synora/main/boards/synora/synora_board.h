@@ -58,6 +58,12 @@ public:
     // connecting, kBad = disconnected/never connected.
     TileStatus GetWifiStatus() const;
 
+    // For the dashboard header's speaker/mute icon -- delegates to
+    // SynoraMqtt's own state (server-driven, Device.Muted) rather than
+    // caching a copy here, since SynoraMqtt is already the source of truth
+    // and there's no board-local logic layered on top (unlike GetWifiStatus).
+    bool IsMuted() const;
+
     // For SynoraDisplay::GetScreen() -- true once WiFi has been down long
     // enough (WIFI_LOST_BLE_FALLBACK_SEC) while paired that CheckWifiLossRecovery()
     // has resumed BLE advertising, so the dashboard can switch to a "WiFi

@@ -92,6 +92,7 @@ void SynoraMqtt::HandleState(const std::string& payload) {
         return;
     }
     ApplyIsPaired(cJSON_IsTrue(cJSON_GetObjectItem(root, "isPaired")));
+    is_muted_.store(cJSON_IsTrue(cJSON_GetObjectItem(root, "muted")));
 
     if (schedules_update_callback_) {
         cJSON* schedules = cJSON_GetObjectItem(root, "schedules");

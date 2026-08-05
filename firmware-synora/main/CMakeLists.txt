@@ -36,6 +36,7 @@ set(SOURCES
     "boards/synora/watering_scheduler.cc"
     "boards/synora/logo_icon.cc"
     "boards/synora/sensor_icons.cc"
+    "boards/synora/status_icons.cc"
 )
 
 set(INCLUDE_DIRS

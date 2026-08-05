@@ -22,7 +22,9 @@ public:
 
     // BOOT-button click: idle -> start listening, listening -> stop
     // (server then sends its reply). No-op if MQTT isn't connected yet
-    // (unpaired/no device id).
+    // (unpaired/no device id). Starting is also a no-op while the device is
+    // server-muted (SynoraMqtt::IsMuted) -- stopping an already-listening
+    // session is still allowed regardless.
     void Toggle();
 
     // Called for every chunk the audio input task reads from the codec,
@@ -42,6 +44,7 @@ private:
 
     void StartListening(bool is_relisten);
     void StopListening();
+    void CancelListeningLocally();
     void EncodeAndPublish(const int16_t* pcm, size_t samples);
 
     AudioCodec* codec_ = nullptr;

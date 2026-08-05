@@ -180,6 +180,32 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
     await _connect();
   }
 
+  // "Thử lại" from the error step -- reconnects to the SAME device instead
+  // of restarting the whole flow with a fresh BLE scan. The device itself
+  // already re-advertises on its own the moment anything (a failed Wi-Fi
+  // connect attempt, an activation timeout, ...) drops the BLE link, so
+  // there's a real device to reconnect to; rescanning just made the user
+  // wait through another 15s discovery + re-pick the same entry from the
+  // list for no reason. Falls back to a full rescan only if _device somehow
+  // isn't set yet (shouldn't happen once past _Step.scanning, but this
+  // button is reachable from the permission-denied error too).
+  Future<void> _retry() async {
+    if (_device == null) {
+      await _requestPermissionsThenScan();
+      return;
+    }
+    setState(() => _error = null);
+    try {
+      await _connect();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _step = _Step.error;
+        _error = e.toString();
+      });
+    }
+  }
+
   Future<void> _connect() async {
     if (!mounted) return;
     setState(() => _step = _Step.connecting);
@@ -803,7 +829,7 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
                         backgroundColor: DeviceDetailScreen.goodColor,
                         foregroundColor: DeviceDetailScreen.backgroundColor,
                       ),
-                      onPressed: _requestPermissionsThenScan,
+                      onPressed: _retry,
                       child: const Text('Thử lại'),
                     ),
                   ],

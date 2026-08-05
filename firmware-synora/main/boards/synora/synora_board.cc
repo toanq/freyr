@@ -326,6 +326,10 @@ TileStatus SynoraBoard::GetWifiStatus() const {
     }
 }
 
+bool SynoraBoard::IsMuted() const {
+    return SynoraMqtt::GetInstance().IsMuted();
+}
+
 void SynoraBoard::CheckWifiLossRecovery() {
     if (!DeviceActivation::GetInstance().IsPaired()) {
         // Not our concern while unpaired -- the constructor's boot check and

@@ -104,7 +104,9 @@ bool DeviceActivation::TryActivate(const std::string& server_url) {
     std::string url = server_url + "/devices/activation";
     std::string request_body = R"({"macAddress":")" + GetMacAddressString() + R"("})";
     std::string response_body;
+    ESP_LOGI(TAG, "Activation POST starting: %s", url.c_str());
     int status_code = HttpPostJson(url, request_body, &response_body);
+    ESP_LOGI(TAG, "Activation POST returned: status=%d", status_code);
     if (status_code != 200) {
         ESP_LOGE(TAG, "Activation request failed, status=%d", status_code);
         return false;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -121,6 +122,28 @@ private:
     // specific disconnect is expected and not a "user backed out mid-rescan"
     // one, so it skips RevertToPreRescanNetworkIfNeeded().
     bool intentional_disconnect_ = false;
+
+    // Guards against a second `control: commit` (e.g. the app's own "Thử
+    // lại" retry, submitted before the phone realizes the prior attempt is
+    // still working) starting a second, overlapping ConnectAndActivate()
+    // while one is already running. Without this, two concurrent
+    // TryActivate() calls each mint their own fresh server-side
+    // ActivationCode for the same device row (the server always overwrites
+    // it), so whichever one the phone actually read off BLE could easily be
+    // the one that's since been superseded -- POST /devices/pair then 404s
+    // or pairs the wrong attempt, and the device never reaches a real
+    // "paired" state even though Wi-Fi/activation individually succeeded.
+    //
+    // A deadline (esp_timer_get_time()/1000 at start, 0 = not running), not
+    // a plain bool -- HttpPostJson's esp_http_client_config_t.timeout_ms
+    // only bounds the socket-level transfer, NOT DNS resolution (a
+    // documented recurring pain point on this project -- see the
+    // Cloudflare/Google DNS-fallback override in SynoraBoard), so
+    // TryActivate() inside this function can in principle hang far longer
+    // than its own nominal timeouts suggest. Without a deadline here, that
+    // would permanently wedge this flag true and lock out every future
+    // pairing attempt until a reboot -- a plain bool has no way to recover.
+    std::atomic<int64_t> connect_and_activate_started_ms_ = 0;
 
     ProvisioningState state_ = ProvisioningState::kIdle;
 
