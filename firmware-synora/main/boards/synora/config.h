@@ -3,6 +3,7 @@
 
 #include <driver/gpio.h>
 #include <hal/adc_types.h>
+#include <hal/spi_types.h>
 #include <driver/i2c_types.h>
 
 // Both match the server's fixed voice audio_params (16kHz/60ms, see
@@ -27,14 +28,11 @@
 #define BOOT_BUTTON_GPIO GPIO_NUM_0
 #define FACTORY_RESET_HOLD_MS 10000
 
-// I2C bus for SHT31 (air temp/humidity) only -- NOT shared with the water-level
-// sensor below. BH1750 (ambient light) dropped for v1, see project_synora_board
-// memory.
-#define BOARD_I2C_PORT     I2C_NUM_0
-#define BOARD_I2C_SDA_GPIO GPIO_NUM_9
-#define BOARD_I2C_SCL_GPIO GPIO_NUM_8
-
-#define SHT31_I2C_ADDR    0x44
+// DHT11 (air temp/humidity), single-wire bit-banged (see dht11_sensor.h) --
+// replaces the SHT31 (was I2C_NUM_0, GPIO8/9). Reuses GPIO9 (was SHT31's
+// SDA); GPIO8 (was SCL) is now free. BH1750 (ambient light) dropped for v1,
+// see project_synora_board memory.
+#define DHT11_GPIO GPIO_NUM_9
 
 // Water-tank level: VL53L1X (not L0X -- downgraded then un-downgraded, see
 // project_synora_board memory), via saleca/vl53l1x_uld_esp_wrapper. On its
@@ -62,43 +60,30 @@
 #define SOIL_MOISTURE_ADC_CHANNEL ADC_CHANNEL_0
 #define SOIL_MOISTURE_ADC_GPIO    GPIO_NUM_1
 
-// ST7793 8-bit parallel (I80) TFT display, 240x400 (Open-Smart 3.5" module;
-// replaces the ST7735S GMT144-10 128x128 SPI panel). ST7793 is real, distinct
-// Sitronix silicon -- not ST7796 -- confirmed from Sitronix's own datasheet
-// and the module's TFT_eSPI reference driver (whose own window registers
-// show HEA=0xEF/VEA=0x18F, i.e. 240x400; the "240x480" on the product listing
-// doesn't match either the chip's 432-gate-line max or any known-working
-// config, so 240x400 is what synora_display.cc actually drives). One
-// GPIO10-18 ribbon for CS/DC/RST/WR/D0-D4; D5-D7 land past two hard gaps in
-// the ESP32-S3's own pinout (see below) rather than staying contiguous --
-// there's no way to route around those and keep one clean ribbon.
+// ILI9341 SPI TFT, 240x320 -- replaces the ST7793 8-bit-parallel (I80) 240x400
+// panel above. Driven in the controller's native portrait orientation (its
+// internal RAM is 240 wide x 320 tall), so no swap_xy/mirror is needed the
+// way a landscape mount would require. Unlike the ST7793, ILI9341 has a real
+// esp_lcd vendor driver (espressif/esp_lcd_ili9341, see main/idf_component.yml
+// and esp_lcd_new_panel_ili9341() in synora_display.cc) -- no hand-rolled
+// register-init table needed here.
 //
-// Gap 1, GPIO19/20: the ESP32-S3's fixed native-USB D-/D+ pins. An earlier
-// revision put D5/D6 here, which fought the native USB PHY for the pins the
-// moment the I80 bus initialized and made the board crash and drop off USB
-// entirely.
-// Gap 2, GPIO22-25: these GPIO numbers don't exist on the ESP32-S3 at all
-// (valid range is 0-21 and 26-48) -- an earlier revision assumed they did
-// (used for PUMP/LED below) and it went undetected because nothing actually
-// referenced those macros in code yet; first real use (D6/D7 here) failed
-// to compile ("GPIO_NUM_22 was not declared").
-#define DISPLAY_WIDTH  240
-#define DISPLAY_HEIGHT 400
-#define DISPLAY_CS_GPIO  GPIO_NUM_10
-#define DISPLAY_DC_GPIO  GPIO_NUM_11
-#define DISPLAY_RST_GPIO GPIO_NUM_12
-#define DISPLAY_WR_GPIO  GPIO_NUM_13  // I80 write strobe / PCLK
-#define DISPLAY_D0_GPIO  GPIO_NUM_14
-#define DISPLAY_D1_GPIO  GPIO_NUM_15
-#define DISPLAY_D2_GPIO  GPIO_NUM_16
-#define DISPLAY_D3_GPIO  GPIO_NUM_17
-#define DISPLAY_D4_GPIO  GPIO_NUM_18
-// GPIO_NUM_19, GPIO_NUM_20: native USB D-/D+ -- do not use for anything.
-#define DISPLAY_D5_GPIO  GPIO_NUM_21
-// GPIO_NUM_22..GPIO_NUM_25: don't exist on ESP32-S3.
-// GPIO_NUM_26..GPIO_NUM_32: SPI flash. GPIO_NUM_33..GPIO_NUM_37: octal PSRAM.
-#define DISPLAY_D6_GPIO  GPIO_NUM_38
-#define DISPLAY_D7_GPIO  GPIO_NUM_42
+// 4-wire SPI (CS/DC/RST/SCK/MOSI; the panel is write-only, no MISO) needs far
+// fewer GPIOs than the old 8-bit parallel bus, so this reuses the first 5 pins
+// of the old CS/DC/RST/WR/D0-D7 ribbon (GPIO10-14) and frees the rest
+// (GPIO16-18, 21, 38, 42) for future use. If your module's backlight (LED/
+// BLK) pin needs active GPIO control rather than being hardwired to 3V3,
+// wire it to one of those freed pins (e.g. GPIO_NUM_15) and drive it high
+// after Init() -- not wired up by default since many ILI9341 breakouts tie
+// it straight to 3V3.
+#define DISPLAY_WIDTH     240
+#define DISPLAY_HEIGHT    320
+#define DISPLAY_SPI_HOST  SPI2_HOST
+#define DISPLAY_CS_GPIO   GPIO_NUM_10
+#define DISPLAY_DC_GPIO   GPIO_NUM_11
+#define DISPLAY_RST_GPIO  GPIO_NUM_12
+#define DISPLAY_SCK_GPIO  GPIO_NUM_13
+#define DISPLAY_MOSI_GPIO GPIO_NUM_14
 
 // Water pump (IRLZ44N logic-level MOSFET gate -- active-high drive).
 #define PUMP_GPIO GPIO_NUM_47

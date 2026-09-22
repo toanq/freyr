@@ -16,14 +16,13 @@ set(SOURCES
     "boards/common/device_activation.cc"
     "boards/common/ble_provisioning.cc"
     "boards/common/synora_mqtt.cc"
-    "boards/common/i2c_device.cc"
     "boards/synora/synora_board.cc"
     "boards/synora/synora_display.cc"
     "boards/synora/dashboard_status.cc"
     "boards/synora/eyes_geometry.cc"
     "boards/synora/synora_voice_session.cc"
     "boards/synora/voice_messages.cc"
-    "boards/synora/sht31_sensor.cc"
+    "boards/synora/dht11_sensor.cc"
     "boards/synora/vl53l1x_water_level_sensor.cc"
     "boards/synora/soil_moisture_sensor.cc"
     "boards/synora/text_renderer.cc"
@@ -37,6 +36,8 @@ set(SOURCES
     "boards/synora/logo_icon.cc"
     "boards/synora/sensor_icons.cc"
     "boards/synora/status_icons.cc"
+    "boards/synora/welcome_audio.cc"
+    "boards/synora/ping_audio.cc"
 )
 
 set(INCLUDE_DIRS
@@ -56,7 +57,8 @@ set(INCLUDE_DIRS
 #                      applies (board has 8MB octal PSRAM); see Phase 0 notes.
 #   esp_timer       -> esp_timer.h (afe engine)
 #   esp_driver_i2s  -> driver/i2s_std.h (no_audio_codec)
-#   esp_driver_i2c  -> driver/i2c_types.h + i2c_master.h (SHT31 bus, boards/common/i2c_device.cc)
+#   esp_driver_i2c  -> driver/i2c_types.h + i2c_master.h (VL53L1X's own internal bus, via the
+#                      saleca__vl53l1x_uld_esp_wrapper component -- see vl53l1x_water_level_sensor.cc)
 #   esp_adc         -> esp_adc/adc_oneshot.h + adc_cali.h (soil_moisture_sensor.cc)
 #   esp-sr          -> AFE + WakeNet (esp_afe_sr_models.h, model_path.h)
 #   button          -> iot_button.h (BOOT-button factory reset, boards/common/button.cc)
@@ -68,8 +70,10 @@ set(INCLUDE_DIRS
 #   mbedtls         -> esp_crt_bundle.h / esp_crt_bundle_attach (device_activation.cc's TLS server-cert verification)
 #   esp_app_format  -> esp_app_desc.h (ble_provisioning.cc's device_info characteristic)
 #   mqtt            -> mqtt_client.h (synora_mqtt.cc; device<->server link per the MQTT migration)
-#   esp_driver_spi  -> driver/spi_common.h (synora_display.cc's SPI bus init)
-#   esp_lcd         -> esp_lcd_panel_vendor.h / esp_lcd_new_panel_st7789 (synora_display.cc)
+#   esp_driver_spi  -> driver/spi_master.h (synora_display.cc's SPI bus init)
+#   esp_lcd         -> esp_lcd_panel_io.h / esp_lcd_panel_ops.h (synora_display.cc)
+#   esp_lcd_ili9341 -> esp_lcd_ili9341.h / esp_lcd_new_panel_ili9341 (synora_display.cc;
+#                      managed component, see idf_component.yml)
 #   esp_audio_codec -> esp_opus_enc.h / esp_opus_dec.h (synora_voice_session.cc)
 #   78__esp-wifi-connect -> WifiManager/WifiStation/SsidManager (pulled dependency, see idf_component.yml)
 #   console         -> esp_console.h (test_console.cc's UART REPL for manual test commands)
@@ -79,5 +83,5 @@ idf_component_register(
     INCLUDE_DIRS ${INCLUDE_DIRS}
     PRIV_REQUIRES nvs_flash esp_hw_support esp_system esp_psram esp_timer esp_driver_i2s esp_driver_i2c esp_driver_gpio
                   esp-sr button bt esp_wifi esp_netif esp_event esp_http_client esp_app_format mqtt esp_driver_spi esp_lcd
-                  esp_audio_codec 78__esp-wifi-connect esp_adc saleca__vl53l1x_uld_esp_wrapper mbedtls console
+                  esp_lcd_ili9341 esp_audio_codec 78__esp-wifi-connect esp_adc saleca__vl53l1x_uld_esp_wrapper mbedtls console
 )

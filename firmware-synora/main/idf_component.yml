@@ -25,9 +25,9 @@ dependencies:
   # espressif/led_strip: ~3.0.2
 
   ## --- Phase 4 (display/UI) ---
-  ## ST7793 240x400, 8-bit parallel/I80. No ESP-IDF component exists for
-  ## ST7793 (checked the registry); synora_display.cc drives it with a
-  ## hand-rolled register-level init ported from the vendor's own ST7793
-  ## reference driver, using esp_lcd_panel_io directly.
+  ## ILI9341 240x320, 4-wire SPI. Real esp_lcd vendor driver (unlike the
+  ## ST7793 this replaced), so synora_display.cc calls esp_lcd_new_panel_ili9341()
+  ## instead of hand-rolling register writes.
+  espressif/esp_lcd_ili9341: ^2.1.0
   # lvgl/lvgl: ~9.5.0
   # esp_lvgl_port: ~2.8.0

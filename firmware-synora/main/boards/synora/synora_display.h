@@ -6,6 +6,7 @@
 
 #include <esp_err.h>
 #include <esp_lcd_panel_io.h>
+#include <esp_lcd_types.h>
 
 #include "dashboard_status.h"
 
@@ -37,18 +38,18 @@ enum class DisplayScreen {
     kConnectingWifi,
 };
 
-// Drives the ST7793 display (config.h's DISPLAY_* pins) with a simple
+// Drives the ILI9341 display (config.h's DISPLAY_* pins) with a simple
 // two-circle "Mochi" face -- no LVGL/display framework yet (Phase 4 stub in
-// idf_component.yml is still unused): direct esp_lcd_panel_io register/pixel
-// writes into an RGB565 framebuffer are all two blinking circles need, and
-// pulling in a whole UI toolkit for that would be pure speculative scope.
+// idf_component.yml is still unused): rendering into a plain RGB565
+// framebuffer and pushing it via esp_lcd_panel_draw_bitmap() is all two
+// blinking circles need, and pulling in a whole UI toolkit for that would be
+// pure speculative scope.
 //
-// No esp_lcd "vendor" driver exists for ST7793 (unlike ST7789/96/etc.), so
-// this talks to esp_lcd_panel_io directly instead of going through an
-// esp_lcd_panel_handle_t: register index writes use the panel_io "cmd" phase
-// (16 bits wide -- ST7793's extended registers, e.g. R400h, don't fit in the
-// 8-bit "cmd" convention most vendor drivers assume) and register values use
-// the "param" phase, matching the vendor's own reference driver.
+// Unlike the ST7793 this replaced, ILI9341 has a real esp_lcd vendor driver
+// (espressif/esp_lcd_ili9341, see idf_component.yml), so this goes through a
+// normal esp_lcd_panel_handle_t (esp_lcd_new_panel_ili9341() + esp_lcd_panel_
+// reset/init/draw_bitmap()) instead of hand-rolling register writes over
+// esp_lcd_panel_io directly.
 class SynoraDisplay {
 public:
     static SynoraDisplay& GetInstance();
@@ -66,6 +67,12 @@ public:
     // DrawEyes()/AnimationTask). Has no effect while idle -- nothing reads
     // it then.
     void SetAudioLevel(float level);
+
+    // Word-wrapped caption drawn under the eyes/mouth -- SynoraVoiceSession
+    // sets this to "Đang nghe..." while listening and to each reply
+    // sentence's text as it arrives, clearing it (pass "") once idle. Has no
+    // effect on any screen but kEyes (kIdle just never shows a subtitle).
+    void SetSubtitle(const std::string& text);
 
     // Debug-only, driven by the UART test console's "fonttest" command --
     // toggles a screen dumping every Vietnamese vowel/tone combination (see
@@ -106,8 +113,6 @@ private:
 
     void InitializeBus();
     esp_err_t InitializePanel();
-    void ResetPanel();
-    void WriteReg(uint16_t index, uint16_t value);
     void PushFramebuffer();
     void BlitMonoBitmap(int x, int y, const uint8_t* bitmap, int width, int height, uint16_t color);
     void DrawEyes(int ry);
@@ -135,16 +140,18 @@ private:
     void DrawPingScreen(float remaining_fraction);
     void FillRect(int x, int y, int width, int height, uint16_t color);
     EyesState GetState();
+    std::string GetSubtitle();
     DisplayScreen GetScreen();
     static void AnimationTask(void* arg);
 
-    esp_lcd_i80_bus_handle_t i80_bus_ = nullptr;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
+    esp_lcd_panel_handle_t panel_ = nullptr;
     uint16_t* framebuffer_ = nullptr;
     SynoraBoard* board_ = nullptr;
 
     std::mutex state_mutex_;
     EyesState state_ = EyesState::kIdle;
+    std::string subtitle_;  // guarded by state_mutex_, like state_ above
     std::atomic<bool> font_test_active_ = false;
     // Deadline, not a plain bool -- like watering_until_ms_/ping_until_ms_
     // below, so this can never get stuck showing "Connecting..." forever if

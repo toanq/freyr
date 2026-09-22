@@ -15,7 +15,11 @@
 #include "watering_schedule.h"
 
 #include <driver/gpio.h>
+#include <driver/spi_master.h>
 #include <esp_heap_caps.h>
+#include <esp_lcd_ili9341.h>
+#include <esp_lcd_panel_ops.h>
+#include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_random.h>
 #include <esp_timer.h>
@@ -35,9 +39,11 @@ namespace {
 // same center, same width -- a blink, not a resize.
 // Scaled from the original 128x128 layout by the 240/128 width ratio (used
 // for radii/spacing too, so the face stays proportioned rather than
-// stretched) and centered on the 240x400 canvas, with blank space above/
-// below since the panel is taller than it is wide.
-constexpr int kEyeCenterY = 200;
+// stretched). Shifted up from the original 240x400 canvas's vertical center
+// (was kEyeCenterY=200) on the shorter 240x320 canvas, to leave room below
+// the mouth for the multi-line subtitle text (see kSubtitleTopY in
+// DrawEyes()) without losing it off the bottom edge.
+constexpr int kEyeCenterY = 150;
 constexpr int kLeftEyeCenterX = 75;
 constexpr int kRightEyeCenterX = 165;
 constexpr int kEyeRadiusX = 34;
@@ -58,7 +64,7 @@ constexpr int kEyeCornerRadius = 14;
 // "w" mouth (UwU-style), stamped as 4 short line strokes below the eyes --
 // stays static regardless of state/audio level, drawn every DrawEyes() call.
 constexpr int kMouthCenterX = 120; // midpoint between kLeftEyeCenterX/kRightEyeCenterX
-constexpr int kMouthCenterY = 270; // clear of the eyes even at max audio-reactive size
+constexpr int kMouthCenterY = 220; // clear of the eyes even at max audio-reactive size (kEyeCenterY moved up to 150, see above)
 constexpr int kMouthHalfWidth = 20;
 constexpr int kMouthDip = 12;
 constexpr int kMouthStrokeRadius = 3;
@@ -84,10 +90,16 @@ constexpr int kBootLogoDurationMs = 1500; // how long the startup splash holds b
 // building for two static strings. Baseline Y = the preview's top-of-line Y
 // (Pillow's default anchor) + that size's ascent (26 for 24px, 20 for 18px).
 constexpr const char* kPairingTitleLines[] = {"Dùng ứng dụng", "Synora để cài đặt", "thiết bị"};
-constexpr int kPairingTitleBaselineY[] = {46, 76, 106};
+constexpr int kPairingTitleBaselineY[] = {26, 50, 74};
 constexpr const char* kPairingHintLines[] = {"Mở ứng dụng Synora trên", "điện thoại để ghép nối", "thiết bị"};
-constexpr int kPairingHintBaselineY[] = {140, 164, 188};
-constexpr int kQrTopY = 202;
+// Below the QR code rather than above it (kQrTopY=80, 185px tall -> bottom
+// 265) -- on the shorter 240x320 canvas there isn't room for title + hint +
+// QR stacked at their original (240x400) sizes/spacing, so the hint moved
+// under the QR and dropped to the smaller 14px font to fit the remaining
+// space above the bottom edge (320). Verify on real hardware that Vietnamese
+// descenders on the last line (baseline 316) aren't clipped.
+constexpr int kPairingHintBaselineY[] = {284, 300, 316};
+constexpr int kQrTopY = 80;
 
 // Shown instead of the pairing screen once CheckWifiLossRecovery() resumes
 // BLE for an already-paired device that's lost WiFi -- same 3-line layout
@@ -139,9 +151,11 @@ constexpr int kHeroDividerY = 162;
 
 // Bottom auto-watering status bar -- declared here (rather than down by
 // DrawDashboardScreen's other auto-water constants) since the sensor grid
-// below needs kAutoWaterDividerY as its own bottom edge.
-constexpr int kAutoWaterDividerY = 372;
-constexpr int kAutoWaterBarBaselineY = 392;
+// below needs kAutoWaterDividerY as its own bottom edge. Compressed from the
+// original 240x400 canvas's 372/392 to fit the shorter 240x320 canvas (still
+// leaves a 12px margin below the footer text's baseline).
+constexpr int kAutoWaterDividerY = 290;
+constexpr int kAutoWaterBarBaselineY = 308;
 
 // 2x2 sensor grid: no card backgrounds, no gutters -- 4 equal rects filling
 // the space between the hero divider and the auto-water divider exactly,
@@ -163,10 +177,12 @@ constexpr int kDashboardTileCenterY[] = {
 // Icon center sits near the top of the tile; value/label baselines below it,
 // all relative to the tile's own center Y so DrawSensorTile stays a single
 // reusable call. Tighter than a full-screen tile would allow -- this grid is
-// the secondary "everything at a glance" view, not the hero.
-constexpr int kTileIconOffsetY = -22;
-constexpr int kTileValueBaselineOffsetY = 18;
-constexpr int kTileLabelBaselineOffsetY = 40;
+// the secondary "everything at a glance" view, not the hero. Scaled down from
+// the original 240x400 canvas's -22/18/40 (which assumed a 105px-tall row) to
+// fit the shorter 240x320 canvas's smaller kDashboardRowHeight (~64px).
+constexpr int kTileIconOffsetY = -14;
+constexpr int kTileValueBaselineOffsetY = 11;
+constexpr int kTileLabelBaselineOffsetY = 24;
 
 constexpr int kFontTestLeftX = 4;
 constexpr int kFontTestTopBaselineY = 20;
@@ -181,7 +197,7 @@ constexpr const char* kWateringTitle = "Đang tưới nước...";
 constexpr int kWateringTitleBaselineY = 60;
 constexpr int kWateringDropMarginX = 30; // keep the drop icon clear of the screen edges
 constexpr int kWateringDropTopY = 140;
-constexpr int kWateringDropBottomY = 340;
+constexpr int kWateringDropBottomY = 270; // was 340 on the taller 240x400 canvas; stays clear of kProgressBarY below
 constexpr int kWateringDropMinCycleTicks = 15; // 15-30 ticks (~3-6s @ kIdlePollMs) per fall, per drop
 constexpr int kWateringDropMaxCycleTicks = 30;
 
@@ -200,58 +216,8 @@ constexpr uint16_t kDividerColor = Rgb565(110, 115, 120); // dashboard separator
 constexpr int kProgressBarX = 20;
 constexpr int kProgressBarWidth = 200;
 constexpr int kProgressBarHeight = 10;
-constexpr int kProgressBarY = 370;
+constexpr int kProgressBarY = 290; // was 370 on the taller 240x400 canvas
 
-struct RegisterEntry {
-    uint16_t index;
-    uint16_t value;
-};
-constexpr uint16_t kDelayMarker = 0xFFFF;
-
-// Ported verbatim from the vendor's own ST7793 reference driver (TFT_eSPI's
-// ST7793_Init.h, from the module's demo_ST7793 sketch), plus the three
-// register writes its begin() applies afterwards via setRotation(0) --
-// gamma/power/frame-rate values here are analog tuning parameters, not
-// documented chip defaults, so this exact sequence (validated by the module
-// vendor on real silicon) is used as-is rather than derived from the
-// datasheet's abstract register descriptions.
-constexpr RegisterEntry kInitSequence[] = {
-    {0x0000, 0x0000}, {0x0000, 0x0000}, {0x0000, 0x0000}, {0x0000, 0x0000},
-    {kDelayMarker, 15},
-    {0x0400, 0x6200},  // NL=0x31 (49) -> 400 rows
-    {0x0008, 0x0808},
-    // Gamma
-    {0x0300, 0x0C00}, {0x0301, 0x5A0B}, {0x0302, 0x0906}, {0x0303, 0x1017},
-    {0x0304, 0x2300}, {0x0305, 0x1700}, {0x0306, 0x6309}, {0x0307, 0x0C09},
-    {0x0308, 0x100C}, {0x0309, 0x2232},
-    {0x0010, 0x0016}, {0x0011, 0x0101}, {0x0012, 0x0000}, {0x0013, 0x0001},
-    {0x0100, 0x0330}, {0x0101, 0x0237}, {0x0103, 0x0D00}, {0x0280, 0x6100},
-    {0x0102, 0xC1B0},
-    {kDelayMarker, 50},
-    {0x0001, 0x0100}, {0x0002, 0x0100},
-    {0x0003, 0x10B0}, {0x0003, 0x10B8},
-    {0x0009, 0x0001}, {0x000C, 0x0000}, {0x0090, 0x8000}, {0x000F, 0x0000},
-    // Full-screen window: 240 cols x 400 rows
-    {0x0210, 0x0000}, {0x0211, 0x00EF}, {0x0212, 0x0000}, {0x0213, 0x018F},
-    {0x0500, 0x0000}, {0x0501, 0x0000}, {0x0502, 0x005F},
-    {0x0401, 0x0001},  // REV=1
-    {0x0404, 0x0000},
-    {kDelayMarker, 50},
-    // ST7793-specific tuning, gated by the extended-register unlock (R0FFh)
-    {0x00FF, 0x0001},
-    {0x0102, 0x01B0}, {0x0710, 0x0013}, {0x0712, 0x001F},
-    {0x0752, 0x002F}, {0x0724, 0x001A},
-    {0x00FF, 0x0000},
-    {0x0007, 0x0100},  // BASEE=1: display on
-    {kDelayMarker, 50},
-    {0x0200, 0x0000}, {0x0201, 0x0000},
-    // Rotation-0/portrait entry mode + driver output control -- the vendor
-    // driver's begin() applies these (via its own setRotation(0)) after the
-    // table above, and they override that table's own R400h/R003h writes.
-    {0x0400, 0x6200},
-    {0x0001, 0x0100},
-    {0x0003, 0x1030},
-};
 }  // namespace
 
 SynoraDisplay& SynoraDisplay::GetInstance() {
@@ -262,9 +228,9 @@ SynoraDisplay& SynoraDisplay::GetInstance() {
 esp_err_t SynoraDisplay::Init(SynoraBoard* board) {
     board_ = board;
 
-    // 240x400x16bpp (~190KB) is too big to reliably fit alongside the rest of
+    // 240x320x16bpp (~150KB) is too big to reliably fit alongside the rest of
     // the app in internal SRAM; the board has octal PSRAM, so allocate the
-    // framebuffer there. The I80 driver DMA-transfers from PSRAM itself, so
+    // framebuffer there. The SPI driver DMA-transfers from PSRAM itself, so
     // it needs DMA capability, not just SPIRAM capacity.
     framebuffer_ = static_cast<uint16_t*>(heap_caps_malloc(
         DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM));
@@ -301,77 +267,69 @@ void SynoraDisplay::DrawBootLogoScreen() {
 }
 
 void SynoraDisplay::InitializeBus() {
-    esp_lcd_i80_bus_config_t bus_config = {};
-    bus_config.clk_src = LCD_CLK_SRC_DEFAULT;
-    bus_config.dc_gpio_num = DISPLAY_DC_GPIO;
-    bus_config.wr_gpio_num = DISPLAY_WR_GPIO;
-    bus_config.data_gpio_nums[0] = DISPLAY_D0_GPIO;
-    bus_config.data_gpio_nums[1] = DISPLAY_D1_GPIO;
-    bus_config.data_gpio_nums[2] = DISPLAY_D2_GPIO;
-    bus_config.data_gpio_nums[3] = DISPLAY_D3_GPIO;
-    bus_config.data_gpio_nums[4] = DISPLAY_D4_GPIO;
-    bus_config.data_gpio_nums[5] = DISPLAY_D5_GPIO;
-    bus_config.data_gpio_nums[6] = DISPLAY_D6_GPIO;
-    bus_config.data_gpio_nums[7] = DISPLAY_D7_GPIO;
-    bus_config.bus_width = 8;
-    bus_config.max_transfer_bytes = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
-    ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&bus_config, &i80_bus_));
-}
-
-void SynoraDisplay::ResetPanel() {
-    gpio_config_t rst_config = {};
-    rst_config.pin_bit_mask = 1ULL << DISPLAY_RST_GPIO;
-    rst_config.mode = GPIO_MODE_OUTPUT;
-    gpio_config(&rst_config);
-
-    gpio_set_level(DISPLAY_RST_GPIO, 0);
-    vTaskDelay(pdMS_TO_TICKS(10)); // >= TRESL (ST7793 datasheet: 1ms min)
-    gpio_set_level(DISPLAY_RST_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(10)); // >= TREST + RC-oscillator stabilization (1ms min each)
-}
-
-void SynoraDisplay::WriteReg(uint16_t index, uint16_t value) {
-    // ST7793's 8-bit-bus protocol needs its (16-bit) register value sent
-    // upper-byte-first. Don't pre-swap the bytes here: esp_lcd's i80 driver
-    // already auto-swizzles the param buffer whenever lcd_param_bits (16,
-    // below) exceeds the bus width (8) -- unconditionally, regardless of the
-    // swap_color_bytes flag (that one only governs tx_color). Passing value
-    // in its natural host byte order and letting that automatic swizzle
-    // reorder it is correct; pre-swapping on top of it double-swaps and
-    // corrupts every register write.
-    esp_lcd_panel_io_tx_param(panel_io_, index, &value, sizeof(value));
+    spi_bus_config_t bus_config = {};
+    bus_config.sclk_io_num = DISPLAY_SCK_GPIO;
+    bus_config.mosi_io_num = DISPLAY_MOSI_GPIO;
+    bus_config.miso_io_num = -1; // panel is write-only
+    bus_config.quadwp_io_num = -1;
+    bus_config.quadhd_io_num = -1;
+    bus_config.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
+    ESP_ERROR_CHECK(spi_bus_initialize(DISPLAY_SPI_HOST, &bus_config, SPI_DMA_CH_AUTO));
 }
 
 esp_err_t SynoraDisplay::InitializePanel() {
-    esp_lcd_panel_io_i80_config_t io_config = {};
+    esp_lcd_panel_io_spi_config_t io_config = {};
     io_config.cs_gpio_num = DISPLAY_CS_GPIO;
-    io_config.pclk_hz = 2 * 1000 * 1000; // conservative for first bring-up; raise once verified on hardware
+    io_config.dc_gpio_num = DISPLAY_DC_GPIO;
+    io_config.spi_mode = 0;
+    // 20MHz over jumper wires/breadboard is a common cause of torn/garbled
+    // frames (SPI signal integrity, not a software bug) -- dropped to 10MHz
+    // for reliable bring-up; raise once the wiring is confirmed solid
+    // (short leads, common ground) and frames come through clean.
+    io_config.pclk_hz = 10 * 1000 * 1000;
     io_config.trans_queue_depth = 10;
-    io_config.dc_levels.dc_idle_level = 0;
-    io_config.dc_levels.dc_cmd_level = 0;  // DCX=0: register index (ST7793's own DCX definition)
-    io_config.dc_levels.dc_dummy_level = 0;
-    io_config.dc_levels.dc_data_level = 1; // DCX=1: register value or pixel data
-    io_config.flags.swap_color_bytes = 1;  // pixel data also goes out upper-byte-first
-    io_config.lcd_cmd_bits = 16;   // ST7793's extended registers (e.g. R400h) are 16 bits, not 8
-    io_config.lcd_param_bits = 16; // ...and so are their values
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus_, &io_config, &panel_io_));
+    io_config.lcd_cmd_bits = 8;
+    io_config.lcd_param_bits = 8;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(static_cast<esp_lcd_spi_bus_handle_t>(DISPLAY_SPI_HOST), &io_config,
+                                             &panel_io_));
 
-    ResetPanel();
+    esp_lcd_panel_dev_config_t panel_config = {};
+    panel_config.reset_gpio_num = DISPLAY_RST_GPIO;
+    panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR; // most ILI9341 modules are wired BGR; flip to RGB if colors look swapped on real hardware
+    panel_config.bits_per_pixel = 16;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(panel_io_, &panel_config, &panel_));
 
-    for (const auto& entry : kInitSequence) {
-        if (entry.index == kDelayMarker) {
-            vTaskDelay(pdMS_TO_TICKS(entry.value));
-        } else {
-            WriteReg(entry.index, entry.value);
-        }
-    }
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(panel_));
+    // Confirmed on real hardware: without swap_xy, this module's native
+    // orientation is landscape (the driver's default MADCTL doesn't match
+    // our assumed 240-wide x 320-tall portrait mapping), so text rendered
+    // along DISPLAY_WIDTH came out running along the panel's physical
+    // vertical axis instead. swap_xy(true) rotates it back to portrait, and
+    // mirroring both axes on top of that is a 180-degree flip -- also
+    // confirmed needed on real hardware (image was upside-down otherwise).
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_, true, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, false)); // flip to true if colors look inverted on real hardware
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
     return ESP_OK;
 }
 
 void SynoraDisplay::PushFramebuffer() {
-    WriteReg(0x0200, 0); // DRAM cursor: column 0
-    WriteReg(0x0201, 0); // DRAM cursor: row 0
-    esp_lcd_panel_io_tx_color(panel_io_, 0x0202, framebuffer_, DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t));
+    // Pushed in row-bands rather than as one 240x320 (153600-byte) transfer.
+    // framebuffer_ lives in PSRAM, so the SPI driver has to bounce each
+    // transfer through a temporary internal-DRAM buffer -- with the whole
+    // frame as a single transaction, that bounce allocation was failing
+    // ("E spi_master: setup_dma_priv_buffer: Failed to allocate priv TX
+    // buffer" on real hardware) since WiFi/BT/esp-sr/audio all compete for
+    // the same limited internal DRAM, leaving only a partial frame drawn and
+    // the rest of the panel showing stale/noise GRAM content. 40-row bands
+    // (240*40*2 = 19200 bytes each, 320/40 = 8 bands) keep each bounce
+    // allocation small enough to reliably succeed alongside those.
+    constexpr int kBandHeight = 40;
+    for (int y = 0; y < DISPLAY_HEIGHT; y += kBandHeight) {
+        esp_lcd_panel_draw_bitmap(panel_, 0, y, DISPLAY_WIDTH, y + kBandHeight, framebuffer_ + y * DISPLAY_WIDTH);
+    }
 }
 
 // Plain 1bpp bitmap blit (rows MSB-first, byte-padded -- same packing as
@@ -485,6 +443,15 @@ void SynoraDisplay::DrawEyes(int ry) {
     FillRoundedRect(kLeftEyeCenterX, kEyeCenterY, kEyeRadiusX, ry, kEyeCornerRadius, kEyeColor);
     FillRoundedRect(kRightEyeCenterX, kEyeCenterY, kEyeRadiusX, ry, kEyeCornerRadius, kEyeColor);
     DrawMouth();
+
+    std::string subtitle = GetSubtitle();
+    if (!subtitle.empty()) {
+        constexpr int kSubtitleMarginX = 16;
+        constexpr int kSubtitleTopY = 250;  // clear of kMouthCenterY (220) + its dip/stroke radius
+        DrawWrappedText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, kSubtitleMarginX, kSubtitleTopY,
+                        subtitle.c_str(), kTextColor, kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
+    }
+
     PushFramebuffer();
 }
 
@@ -509,10 +476,10 @@ void SynoraDisplay::DrawPairingStyleScreen(const char* const* title_lines, int t
                      kFontLineHeight24);
         }
         for (int i = 0; i < hint_line_count; i++) {
-            int width = MeasureTextWidth(hint_lines[i], kFontGlyphs18, kFontGlyphCount18, kFontLineHeight18);
+            int width = MeasureTextWidth(hint_lines[i], kFontGlyphs14, kFontGlyphCount14, kFontLineHeight14);
             DrawText(framebuffer_, DISPLAY_WIDTH, DISPLAY_HEIGHT, (DISPLAY_WIDTH - width) / 2,
-                     kPairingHintBaselineY[i], hint_lines[i], kTextColor, kFontGlyphs18, kFontGlyphCount18,
-                     kFontLineHeight18);
+                     kPairingHintBaselineY[i], hint_lines[i], kTextColor, kFontGlyphs14, kFontGlyphCount14,
+                     kFontLineHeight14);
         }
         BlitMonoBitmap((DISPLAY_WIDTH - kQrDownloadWidth) / 2, kQrTopY, kQrDownloadBitmap, kQrDownloadWidth,
                        kQrDownloadHeight, kTextColor);
@@ -835,6 +802,11 @@ void SynoraDisplay::SetAudioLevel(float level) {
     audio_level_.store(level);
 }
 
+void SynoraDisplay::SetSubtitle(const std::string& text) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    subtitle_ = text;
+}
+
 void SynoraDisplay::ShowWatering(int duration_ms) {
     int64_t now_ms = esp_timer_get_time() / 1000;
     watering_until_ms_.store(now_ms + duration_ms);
@@ -867,6 +839,11 @@ void SynoraDisplay::ClearConnectingToWifi() {
 EyesState SynoraDisplay::GetState() {
     std::lock_guard<std::mutex> lock(state_mutex_);
     return state_;
+}
+
+std::string SynoraDisplay::GetSubtitle() {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return subtitle_;
 }
 
 // Font-test wins over everything (debug override, only ever on because
