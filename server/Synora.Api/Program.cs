@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using FirebaseAdmin;
 using FirebaseAdmin.Messaging;
@@ -10,10 +11,14 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Synora.Api.Auth;
+using Synora.Api.Cms;
+using Synora.Api.Firmware;
 using Synora.Api.Mqtt;
 using Synora.Api.Services;
 using Synora.Core;
@@ -28,10 +33,20 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
+// Public hostnames, e.g. Domain:App = synora.carcise.dev (web console + /api),
+// Domain:Landing = synora-landing.carcise.dev (landing + /cms). Set via
+// SYNORA_DOMAIN / LANDING_DOMAIN in .env -> docker-compose -> Domain__App/__Landing.
+var appDomain = NormalizeDomain(builder.Configuration["Domain:App"]);
+var landingDomain = NormalizeDomain(builder.Configuration["Domain:Landing"]);
+
+var corsOrigins = new[] { "http://localhost:5173" }
+    .Concat(new[] { appDomain, landingDomain }.Where(d => d is not null).Select(d => $"https://{d}"))
+    .ToArray();
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins(corsOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials());
@@ -67,11 +82,38 @@ builder.Services.AddSwaggerGen(options =>
 var avatarStoragePath = builder.Configuration["Avatar:StoragePath"] ?? "/data/avatars";
 Directory.CreateDirectory(avatarStoragePath);
 
+// Same file-on-disk-plus-path-column convention as avatars above, for the
+// user's raw captured audio (see LlmVoicePipeline/DiscussionMessage.UserAudioPath)
+// -- kept in its own directory since these are WAV recordings, not images.
+var recordingsStoragePath = builder.Configuration["Recordings:StoragePath"] ?? "/data/recordings";
+Directory.CreateDirectory(recordingsStoragePath);
+
+// Same convention again, for WAV files published by the firmware's
+// diagnostic `mictest` console command (see MqttService/MicTestUpload) --
+// kept in its own directory since these are hardware-diagnostic recordings,
+// not conversation history.
+var micTestStoragePath = builder.Configuration["MicTestUploads:StoragePath"] ?? "/data/mictest";
+Directory.CreateDirectory(micTestStoragePath);
+
+// Same convention again, for admin-uploaded firmware .bin files (see
+// FirmwareBuild) served back to devices for both the WiFi-OTA and BLE-push
+// fallback update paths.
+var firmwareStoragePath = builder.Configuration["Firmware:StoragePath"] ?? "/data/firmware";
+Directory.CreateDirectory(firmwareStoragePath);
+
 var jwtSigningKey = builder.Configuration["Jwt:SigningKey"];
 var jwtConfigured = !string.IsNullOrEmpty(jwtSigningKey);
 
 builder.Services
-    .AddAuthentication()
+    .AddAuthentication(options =>
+    {
+        // Results.Forbid() (used throughout for manual IsAdmin(http)/owner
+        // checks) needs a default forbid scheme to resolve -- with two
+        // schemes registered below and no default, it throws
+        // InvalidOperationException instead of returning 403.
+        options.DefaultForbidScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
     {
         options.Cookie.Name = "synora_auth";
@@ -122,6 +164,7 @@ builder.Services.AddAuthorization(options =>
 builder.Services.Configure<LlmOptions>(builder.Configuration.GetSection("Llm"));
 builder.Services.Configure<AsrOptions>(builder.Configuration.GetSection("Asr"));
 builder.Services.Configure<TtsOptions>(builder.Configuration.GetSection("Tts"));
+builder.Services.Configure<VoiceRecordingOptions>(builder.Configuration.GetSection("Recordings"));
 builder.Services.AddSingleton<IVoicePipeline, LlmVoicePipeline>();
 if (builder.Environment.IsEnvironment("Testing"))
 {
@@ -143,9 +186,14 @@ builder.Services.AddSingleton<VoiceMqttDispatcher>();
 // comment for the topic scheme and how the MqttService<->VoiceMqttDispatcher
 // circular dependency is avoided.
 builder.Services.Configure<MqttOptions>(builder.Configuration.GetSection("Mqtt"));
+builder.Services.Configure<MicTestUploadOptions>(builder.Configuration.GetSection("MicTestUploads"));
 builder.Services.AddSingleton<LowWaterAlertService>();
 builder.Services.AddSingleton<MqttService>();
 builder.Services.AddSingleton<IDeviceMqttPublisher>(sp => sp.GetRequiredService<MqttService>());
+// Same MqttService instance, resolved as the other interface it implements --
+// needed by /admin/voice-test/chat to build an ad-hoc VoiceSession for real
+// MCP tool calls (see that endpoint's comment).
+builder.Services.AddSingleton<IVoicePublisher>(sp => sp.GetRequiredService<MqttService>());
 // The hosted service (the actual broker connect/subscribe loop) is skipped
 // under "Testing" -- there's no Mosquitto to connect to in the test host, and
 // VoiceMqttDispatcher (the message-handling logic that matters for tests) is
@@ -169,6 +217,12 @@ var facebookAppSecret = app.Configuration["OAuth:Facebook:AppSecret"];
 var facebookConfigured = !string.IsNullOrEmpty(facebookAppId) && !string.IsNullOrEmpty(facebookAppSecret);
 var firebaseServiceAccountJson = app.Configuration["Firebase:ServiceAccountJson"];
 var firebaseConfigured = !string.IsNullOrEmpty(firebaseServiceAccountJson);
+// Public URL devices reach this API at (e.g. https://synora.carcise.dev/api) -- the
+// request's own Scheme/Host is wrong behind Cloudflare+Traefik (http, /api stripped).
+// Explicit Firmware:PublicBaseUrl wins; otherwise derived from Domain:App.
+var firmwarePublicBaseUrl = app.Configuration["Firmware:PublicBaseUrl"]?.Trim().TrimEnd('/') is { Length: > 0 } explicitFirmwareUrl
+    ? explicitFirmwareUrl
+    : appDomain is not null ? $"https://{appDomain}/api" : null;
 
 if (!jwtConfigured)
 {
@@ -823,6 +877,7 @@ devicesGroup.MapGet("/", async (SynoraDbContext db, HttpContext http) =>
             d.LowWaterAlertIntervalMinutes,
             d.XiaozhiActivationCode,
             d.Muted,
+            d.FirmwareVersion,
             AvatarUrl = d.AvatarPath != null ? $"/devices/{d.Id}/avatar" : null,
             Owner = d.Owner != null ? d.Owner.Username : null,
             LatestReading = db.SensorReadings
@@ -859,7 +914,8 @@ devicesGroup.MapGet("/", async (SynoraDbContext db, HttpContext http) =>
             d.LatestReading?.WaterLevelPercent),
         ComputeIsOnline(d.LastSeenAt),
         d.XiaozhiActivationCode,
-        d.Muted));
+        d.Muted,
+        d.FirmwareVersion));
 }).RequireAuthorization();
 
 // Any device-trust-model request (telemetry/pending-command/schedules) counts
@@ -915,6 +971,7 @@ devicesGroup.MapGet("/{id:guid}", async (Guid id, SynoraDbContext db, HttpContex
             d.LowWaterAlertIntervalMinutes,
             d.XiaozhiActivationCode,
             d.Muted,
+            d.FirmwareVersion,
             AvatarUrl = d.AvatarPath != null ? $"/devices/{d.Id}/avatar" : null,
             Owner = d.Owner != null ? d.Owner.Username : null,
             LatestReading = db.SensorReadings
@@ -949,7 +1006,8 @@ devicesGroup.MapGet("/{id:guid}", async (Guid id, SynoraDbContext db, HttpContex
             device.LatestReading?.WaterLevelPercent),
         ComputeIsOnline(device.LastSeenAt),
         device.XiaozhiActivationCode,
-        device.Muted));
+        device.Muted,
+        device.FirmwareVersion));
 }).RequireAuthorization();
 
 // Most-recent-first page of this device's voice conversation history (see
@@ -970,10 +1028,42 @@ devicesGroup.MapGet("/{id:guid}/discussions", async (Guid id, SynoraDbContext db
         .Where(m => m.DeviceId == id)
         .OrderByDescending(m => m.CreatedAt)
         .Take(100)
-        .Select(m => new DiscussionMessageDto(m.Id, m.SessionId, m.UserText, m.AssistantText, m.CreatedAt))
+        .Select(m => new DiscussionMessageDto(
+            m.Id, m.SessionId, m.UserText, m.AssistantText, m.CreatedAt, m.UserAudioPath != null))
         .ToListAsync();
 
     return Results.Ok(discussions);
+}).RequireAuthorization();
+
+// Serves the WAV recording of what the user actually said for one turn, so
+// the web console can play it back next to the transcribed UserText to spot
+// STT errors -- see DiscussionMessage.UserAudioPath/LlmVoicePipeline. Same
+// owner-or-admin gating as GET /devices/{id}/discussions above (this is
+// scoped under the same device, not a bare message-id lookup, so the
+// ownership check stays on the device row).
+devicesGroup.MapGet("/{id:guid}/discussions/{messageId:guid}/audio", async (Guid id, Guid messageId, SynoraDbContext db, HttpContext http) =>
+{
+    var isAdmin = http.User.IsInRole(nameof(UserRole.Admin)) || http.User.IsInRole(nameof(UserRole.SuperAdmin));
+    var userId = CurrentUserId(http);
+    var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == id && (isAdmin || d.OwnerUserId == userId));
+    if (device is null)
+    {
+        return Results.NotFound();
+    }
+
+    var message = await db.DiscussionMessages.FirstOrDefaultAsync(m => m.Id == messageId && m.DeviceId == id);
+    if (message?.UserAudioPath is null)
+    {
+        return Results.NotFound();
+    }
+
+    var fullPath = Path.Combine(recordingsStoragePath, message.UserAudioPath);
+    if (!File.Exists(fullPath))
+    {
+        return Results.NotFound();
+    }
+
+    return Results.File(fullPath, "audio/wav");
 }).RequireAuthorization();
 
 // Admin-only: injects a fake reading through the exact same path as real
@@ -1252,6 +1342,107 @@ devicesGroup.MapPost("/{id:guid}/ping", async (Guid id, SynoraDbContext db, Http
     return Results.Ok();
 }).RequireAuthorization();
 
+// One turn of the app's own "talk to Synora" assistant (device detail
+// screen's talk button) -- STT the uploaded recording, run it through the
+// same LlmVoicePipeline.SystemPrompt + real MCP tools as a device voice turn
+// (via VoiceMqttDispatcher.GetOrCreateSession, same mechanism as the admin
+// chat-test endpoint -- see that endpoint's comment for why registering the
+// session matters), then TTS the reply back as a WAV the app can play
+// immediately. Turn-based (one HTTP call per utterance) rather than
+// streaming -- the app itself decides when a recording ends (silence
+// timeout or explicit stop) and calls this once per utterance, looping on
+// its own for the auto-relisten conversation.
+devicesGroup.MapPost("/{id:guid}/assistant/turn", async (
+    Guid id, HttpContext http, SynoraDbContext db, ISpeechToText speechToText, ILlmClient llmClient,
+    ITextToSpeech textToSpeech, McpBridge mcpBridge, IVoicePublisher voicePublisher,
+    VoiceMqttDispatcher voiceDispatcher, IFormFile file) =>
+{
+    var isAdmin = http.User.IsInRole(nameof(UserRole.Admin)) || http.User.IsInRole(nameof(UserRole.SuperAdmin));
+    var userId = CurrentUserId(http);
+    var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == id && (isAdmin || d.OwnerUserId == userId));
+    if (device is null)
+    {
+        return Results.NotFound();
+    }
+
+    const int sampleRateHz = 16000; // matches the firmware's SynoraVoiceSession / LlmVoicePipeline
+    using var stream = new MemoryStream();
+    await file.CopyToAsync(stream);
+
+    short[] pcm;
+    try
+    {
+        pcm = OpusAudioDecoder.ParseWav16Mono(stream.ToArray(), sampleRateHz);
+    }
+    catch (InvalidDataException ex)
+    {
+        return Results.BadRequest($"Invalid WAV file: {ex.Message} (expected mono 16-bit PCM at {sampleRateHz} Hz).");
+    }
+
+    var transcript = await speechToText.TranscribeAsync(pcm, sampleRateHz, http.RequestAborted);
+    if (string.IsNullOrWhiteSpace(transcript))
+    {
+        // Empty transcript (silence/noise the ASR couldn't make anything of)
+        // -- ask the user to repeat rather than sending nothing to the LLM,
+        // same reasoning LlmVoicePipeline would hit on a blank turn.
+        return Results.Ok(new AssistantTurnResponse("", "Mình chưa nghe rõ, bạn nói lại được không nhỉ?", null));
+    }
+
+    var session = voiceDispatcher.GetOrCreateSession(id, voicePublisher);
+    var tools = await mcpBridge.GetToolsAsync(id, session, http.RequestAborted);
+    var reply = await llmClient.GetReplyAsync(
+        LlmVoicePipeline.SystemPrompt, transcript, tools,
+        (name, args, ct) => mcpBridge.CallToolAsync(id, session, name, args, ct),
+        http.RequestAborted);
+
+    string? replyAudioWavBase64 = null;
+    var (replyPcm, replySampleRateHz) = await textToSpeech.SynthesizeAsync(reply, http.RequestAborted);
+    if (replyPcm.Length > 0)
+    {
+        replyAudioWavBase64 = Convert.ToBase64String(OpusAudioDecoder.BuildWav(replyPcm, replySampleRateHz));
+    }
+
+    // Persisted the same way the admin chat-test endpoint does, so a
+    // conversation held from the app shows up in this device's normal chat
+    // history (GET /devices/{id}/discussions) alongside real voice turns.
+    var assistantSessionId = $"app-assistant-{Guid.NewGuid()}";
+    string? userAudioFileName = null;
+    if (pcm.Length > 0)
+    {
+        // Best-effort, same file naming/format as LlmVoicePipeline.TryWriteUserAudio.
+        try
+        {
+            var audioFileName = $"{assistantSessionId}-{Guid.NewGuid():N}.wav";
+            await File.WriteAllBytesAsync(
+                Path.Combine(recordingsStoragePath, audioFileName), OpusAudioDecoder.BuildWav(pcm, sampleRateHz));
+            userAudioFileName = audioFileName;
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogWarning(ex, "Failed to write assistant-turn user audio for device {DeviceId}", id);
+        }
+    }
+
+    db.DiscussionMessages.Add(new DiscussionMessage
+    {
+        DeviceId = id,
+        SessionId = assistantSessionId,
+        UserText = transcript,
+        AssistantText = reply,
+        CreatedAt = DateTimeOffset.UtcNow,
+        UserAudioPath = userAudioFileName,
+    });
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new AssistantTurnResponse(transcript, reply, replyAudioWavBase64));
+})
+// Same reasoning as /voice-test/stt's DisableAntiforgery(): no antiforgery
+// middleware is registered anywhere in this app, so IFormFile's
+// auto-attached antiforgery check would just throw looking for state that
+// was never configured -- this doesn't turn off protection that existed.
+.RequireAuthorization()
+.DisableAntiforgery();
+
 devicesGroup.MapPut("/{id:guid}/muted", async (
     Guid id, SynoraDbContext db, HttpContext http, IDeviceMqttPublisher mqtt, SetMutedRequest request) =>
 {
@@ -1458,12 +1649,22 @@ adminGroup.MapPost("/voice-test/tts", async (HttpContext http, ITextToSpeech tex
 // deviceId is given, persists the exchange as a DiscussionMessage the same
 // way a real turn does, so it shows up in that device's normal chat history
 // (GET /devices/{id}/discussions) rather than needing separate test-only
-// storage. No MCP tools here -- unlike a real turn, there's no live device
-// voice session to route tool calls through, so this always runs with an
-// empty tool list (a tool-call attempt would just get a "not available"
-// error back, same as a device that never answers).
+// storage.
+//
+// MCP tools ARE wired up when a deviceId is given, via
+// VoiceMqttDispatcher.GetOrCreateSession -- reuses a live device session if
+// one's already active (a real voice turn in progress), otherwise registers
+// a fresh ad-hoc one. Registration matters, not just construction: an
+// unregistered VoiceSession's outgoing MCP request still reaches the device
+// fine, but VoiceMqttDispatcher.HandleControlAsync drops the device's mcp
+// reply for having no matching _sessions entry, and the call just times out
+// (confirmed live). Without a deviceId there's nothing to route tool calls
+// to, so it still runs with an empty tool list in that case (a tool-call
+// attempt would just get a "not available" error back, same as a device that
+// never answers).
 adminGroup.MapPost("/voice-test/chat", async (
-    HttpContext http, SynoraDbContext db, ILlmClient llmClient, ChatTestRequest request) =>
+    HttpContext http, SynoraDbContext db, ILlmClient llmClient, McpBridge mcpBridge,
+    IVoicePublisher voicePublisher, VoiceMqttDispatcher voiceDispatcher, ChatTestRequest request) =>
 {
     if (!IsAdmin(http))
     {
@@ -1474,12 +1675,20 @@ adminGroup.MapPost("/voice-test/chat", async (
         return Results.BadRequest("Message must not be empty.");
     }
 
-    var reply = await llmClient.GetReplyAsync(
-        LlmVoicePipeline.SystemPrompt, request.Message,
-        Array.Empty<Synora.Protocol.McpToolDefinition>(),
+    var tools = Array.Empty<Synora.Protocol.McpToolDefinition>() as IReadOnlyList<Synora.Protocol.McpToolDefinition>;
+    Func<string, System.Text.Json.JsonElement, CancellationToken, Task<System.Text.Json.JsonElement>> callTool =
         (_, _, _) => Task.FromResult(System.Text.Json.JsonSerializer.SerializeToElement(
-            new { error = new { message = "tools not available in chat-test mode" } })),
-        http.RequestAborted);
+            new { error = new { message = "tools not available in chat-test mode" } }));
+
+    if (request.DeviceId is Guid toolDeviceId)
+    {
+        var session = voiceDispatcher.GetOrCreateSession(toolDeviceId, voicePublisher);
+        tools = await mcpBridge.GetToolsAsync(toolDeviceId, session, http.RequestAborted);
+        callTool = (name, args, ct) => mcpBridge.CallToolAsync(toolDeviceId, session, name, args, ct);
+    }
+
+    var reply = await llmClient.GetReplyAsync(
+        LlmVoicePipeline.SystemPrompt, request.Message, tools, callTool, http.RequestAborted);
 
     if (request.DeviceId is Guid deviceId)
     {
@@ -1499,6 +1708,147 @@ adminGroup.MapPost("/voice-test/chat", async (
     }
 
     return Results.Ok(new ChatTestResponse(reply));
+});
+
+// Retroactive cleanup for the case-mismatched-MAC duplicate rows
+// NormalizeMac() (see /devices/activation above) stops from being created
+// going forward but can't fix for rows that already exist from before that
+// fix -- groups every device by the same normalized (uppercase) MAC and
+// returns only the groups with more than one row, so an admin can see
+// exactly which rows are the same physical device without querying the DB
+// by hand. "Has related data" is surfaced per-row (not just a boolean on
+// the group) so the admin can tell *which* row in a group is the safe one
+// to remove via the hard-delete endpoint below.
+adminGroup.MapGet("/duplicate-devices", async (SynoraDbContext db, HttpContext http) =>
+{
+    if (!IsAdmin(http))
+    {
+        return Results.Forbid();
+    }
+
+    var devices = await db.Devices
+        .Include(d => d.Owner)
+        .Where(d => d.MacAddress != null)
+        .ToListAsync();
+
+    var groups = devices
+        .GroupBy(d => NormalizeMac(d.MacAddress)!)
+        .Where(g => g.Count() > 1)
+        .OrderBy(g => g.Key)
+        .ToList();
+
+    if (groups.Count == 0)
+    {
+        return Results.Ok(Array.Empty<DuplicateDeviceGroupDto>());
+    }
+
+    var deviceIds = groups.SelectMany(g => g.Select(d => d.Id)).ToList();
+    var deviceIdsWithReadings = (await db.SensorReadings
+        .Where(r => deviceIds.Contains(r.DeviceId))
+        .Select(r => r.DeviceId)
+        .Distinct()
+        .ToListAsync())
+        .ToHashSet();
+    var deviceIdsWithSchedules = (await db.WateringSchedules
+        .Where(s => deviceIds.Contains(s.DeviceId))
+        .Select(s => s.DeviceId)
+        .Distinct()
+        .ToListAsync())
+        .ToHashSet();
+
+    var result = groups.Select(g => new DuplicateDeviceGroupDto(
+        g.Key,
+        g.OrderBy(d => d.CreatedAt)
+         .Select(d => new DuplicateDeviceDto(
+             d.Id,
+             d.MacAddress,
+             d.Name,
+             d.OwnerUserId,
+             d.Owner != null ? (d.Owner.Email ?? d.Owner.Username) : null,
+             d.CreatedAt,
+             d.PairedAt,
+             deviceIdsWithReadings.Contains(d.Id) || deviceIdsWithSchedules.Contains(d.Id)))
+         .ToList()))
+        .ToList();
+
+    return Results.Ok(result);
+});
+
+// Admin-only hard delete for cleaning up a specific bad/duplicate device
+// row found via GET /admin/duplicate-devices above -- distinct from
+// DELETE /devices/{id}, which deliberately only unpairs (see that
+// endpoint's own comment) and is unsuitable for actually removing a
+// leftover duplicate row from the table. Refuses when the device has any
+// SensorReadings/WateringSchedules attached rather than silently cascading
+// through them (both cascade-delete at the DB level per SynoraDbContext) --
+// an admin should have to consciously accept losing real history, not have
+// it vanish as a side effect of tidying up what looked like a dead row.
+adminGroup.MapDelete("/devices/{id:guid}", async (Guid id, SynoraDbContext db, HttpContext http) =>
+{
+    if (!IsAdmin(http))
+    {
+        return Results.Forbid();
+    }
+
+    var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == id);
+    if (device is null)
+    {
+        return Results.NotFound();
+    }
+
+    var hasSensorReadings = await db.SensorReadings.AnyAsync(r => r.DeviceId == id);
+    var hasSchedules = await db.WateringSchedules.AnyAsync(s => s.DeviceId == id);
+    if (hasSensorReadings || hasSchedules)
+    {
+        var parts = new List<string>();
+        if (hasSensorReadings) parts.Add("sensor readings");
+        if (hasSchedules) parts.Add("watering schedules");
+        return Results.Problem(
+            title: "Refusing to hard-delete device with related data",
+            detail: $"Device {id} still has {string.Join(" and ", parts)} attached -- this is real history, " +
+                "not a dead leftover row. If it needs to stop being owned/visible to its current user, use " +
+                "DELETE /devices/{id} (unpair) instead; only hard-delete rows confirmed to have zero related data.",
+            statusCode: StatusCodes.Status409Conflict);
+    }
+
+    // Same avatar-file cleanup as DELETE /devices/{id} (unpair) -- otherwise
+    // the file is orphaned on disk once the row disappears.
+    if (device.AvatarPath is not null)
+    {
+        var avatarPath = Path.Combine(avatarStoragePath, device.AvatarPath);
+        if (File.Exists(avatarPath))
+        {
+            File.Delete(avatarPath);
+        }
+    }
+
+    // DiscussionMessages/MicTestUploads cascade-delete with the row, so collect
+    // their WAV paths first and remove the files once the delete has committed.
+    var recordingFiles = await db.DiscussionMessages
+        .Where(m => m.DeviceId == id && m.UserAudioPath != null)
+        .Select(m => m.UserAudioPath!)
+        .ToListAsync();
+    var micTestFiles = await db.MicTestUploads
+        .Where(m => m.DeviceId == id)
+        .Select(m => m.FilePath)
+        .ToListAsync();
+
+    db.Devices.Remove(device);
+    await db.SaveChangesAsync();
+
+    foreach (var fullPath in recordingFiles.Select(f => Path.Combine(recordingsStoragePath, f))
+                 .Concat(micTestFiles.Select(f => Path.Combine(micTestStoragePath, f))))
+    {
+        try
+        {
+            File.Delete(fullPath);
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogWarning(ex, "Failed to delete {Path} after hard-deleting device {DeviceId}", fullPath, id);
+        }
+    }
+    return Results.Ok();
 });
 
 // Global, admin-editable config not tied to any one device/user -- see
@@ -1558,6 +1908,311 @@ adminGroup.MapGet("/tts-voices", async (IHttpClientFactory httpClientFactory, IO
     return Results.Ok(voices);
 }).RequireAuthorization("SuperAdminOnly");
 
+// Admin-only, not owner-or-admin like the regular per-device endpoints
+// (GET /devices/{id}/discussions etc.) -- this is a fleet-wide hardware
+// diagnostic tool (firmware's `mictest` console command, see MqttService)
+// for whoever administers the fleet, not something a regular device owner
+// needs. Lists across ALL devices, newest-first, same 100-row cap as
+// GET /devices/{id}/discussions.
+adminGroup.MapGet("/mictest-uploads", async (SynoraDbContext db, HttpContext http) =>
+{
+    if (!IsAdmin(http))
+    {
+        return Results.Forbid();
+    }
+
+    var uploads = await db.MicTestUploads
+        .Include(m => m.Device)
+        .OrderByDescending(m => m.CreatedAt)
+        .Take(100)
+        .Select(m => new MicTestUploadDto(
+            m.Id, m.DeviceId, m.Device != null ? m.Device.Name : "(deleted device)", m.CreatedAt, m.SizeBytes))
+        .ToListAsync();
+
+    return Results.Ok(uploads);
+});
+
+// Serves the raw WAV file for one mictest upload -- same admin-only gating
+// as GET /admin/mictest-uploads above (this is a bare upload-id lookup,
+// unlike GET /devices/{id}/discussions/{messageId}/audio, since there's no
+// owner to scope it under).
+adminGroup.MapGet("/mictest-uploads/{id:guid}/audio", async (Guid id, SynoraDbContext db, HttpContext http) =>
+{
+    if (!IsAdmin(http))
+    {
+        return Results.Forbid();
+    }
+
+    var upload = await db.MicTestUploads.FirstOrDefaultAsync(m => m.Id == id);
+    if (upload is null)
+    {
+        return Results.NotFound();
+    }
+
+    var fullPath = Path.Combine(micTestStoragePath, upload.FilePath);
+    if (!File.Exists(fullPath))
+    {
+        return Results.NotFound();
+    }
+
+    return Results.File(fullPath, "audio/wav");
+});
+
+// Admin-only firmware upload -- validates .bin extension, computes the
+// sha256 the device will be told to verify against (see
+// IDeviceMqttPublisher.PublishOtaCommandAsync / BLE ota_start), and stores
+// the file under Firmware:StoragePath keyed by its own Id rather than its
+// (free-form, not filename-safe) version string. Versions are unique: a
+// re-upload of an existing version is rejected with 409 before anything is
+// written to disk. A .zip is a flash kit (scripts/package-firmware.sh): its
+// app image becomes the OTA .bin and the rest is kept for USB flashing.
+adminGroup.MapPost("/firmware", async (HttpContext http, SynoraDbContext db, IFormFile file, [FromForm] string version, [FromForm] string? notes) =>
+{
+    if (!IsAdmin(http))
+    {
+        return Results.Forbid();
+    }
+    var isKit = file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+    if (!isKit && !file.FileName.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest("Firmware file must be a .bin app image or a flash-kit .zip.");
+    }
+    if (file.Length == 0)
+    {
+        return Results.BadRequest("Firmware file is empty.");
+    }
+    if (string.IsNullOrWhiteSpace(version))
+    {
+        return Results.BadRequest("Version is required.");
+    }
+    if (await db.FirmwareBuilds.AnyAsync(f => f.Version == version))
+    {
+        return Results.Conflict($"Firmware version '{version}' already exists.");
+    }
+    if (isKit)
+    {
+        return await SaveFlashKitBuildAsync(db, file, version, notes);
+    }
+    if (file.Length > 8 * 1024 * 1024)
+    {
+        return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    }
+
+    const byte EspImageMagic = 0xE9;
+    await using (var header = file.OpenReadStream())
+    {
+        if (header.ReadByte() != EspImageMagic)
+        {
+            return Results.BadRequest("Not an ESP32 app image (missing 0xE9 magic byte).");
+        }
+    }
+
+    var id = Guid.NewGuid();
+    var fileName = $"{id}.bin";
+    var fullPath = Path.Combine(firmwareStoragePath, fileName);
+
+    string sha256Hex;
+    using (var sha256 = SHA256.Create())
+    await using (var stream = File.Create(fullPath))
+    {
+        await file.CopyToAsync(stream);
+        stream.Position = 0;
+        var hash = await sha256.ComputeHashAsync(stream);
+        sha256Hex = Convert.ToHexStringLower(hash);
+    }
+
+    var build = new FirmwareBuild
+    {
+        Id = id,
+        Version = version,
+        FileName = fileName,
+        Sha256 = sha256Hex,
+        SizeBytes = file.Length,
+        CreatedAt = DateTimeOffset.UtcNow,
+        Notes = notes,
+    };
+    db.FirmwareBuilds.Add(build);
+    try
+    {
+        await db.SaveChangesAsync();
+    }
+    catch
+    {
+        File.Delete(fullPath);
+        throw;
+    }
+
+    return Results.Ok(new FirmwareBuildDto(build.Id, build.Version, build.SizeBytes, build.Sha256, build.CreatedAt, build.Notes, build.HasFlashKit));
+})
+// Same reasoning as /devices/{id}/avatar's DisableAntiforgery(): no
+// antiforgery middleware is registered anywhere in this app, so IFormFile's
+// auto-attached antiforgery metadata would otherwise throw at request time.
+.DisableAntiforgery()
+// Plain .bin uploads are capped at 8 MB in the handler; flash kits carry
+// bootloader + srmodels too, so the request limit is the kit's.
+.WithMetadata(new RequestSizeLimitAttribute(FlashKit.MaxTotalBytes));
+
+async Task<IResult> SaveFlashKitBuildAsync(SynoraDbContext db, IFormFile file, string version, string? notes)
+{
+    var id = Guid.NewGuid();
+    var appFileName = $"{id}.bin";
+    var appPath = Path.Combine(firmwareStoragePath, appFileName);
+    var kitDir = FlashKitEndpoints.KitDir(firmwareStoragePath, id);
+
+    void Cleanup()
+    {
+        if (File.Exists(appPath)) File.Delete(appPath);
+        if (Directory.Exists(kitDir)) Directory.Delete(kitDir, recursive: true);
+    }
+
+    string appSha;
+    long appSize;
+    try
+    {
+        await using var upload = file.OpenReadStream();
+        (_, appSha, appSize) = await FlashKit.ExtractAsync(upload, kitDir, appPath);
+    }
+    catch (FlashKitException ex)
+    {
+        Cleanup();
+        return Results.BadRequest(ex.Message);
+    }
+
+    var build = new FirmwareBuild
+    {
+        Id = id,
+        Version = version,
+        FileName = appFileName,
+        Sha256 = appSha,
+        SizeBytes = appSize,
+        CreatedAt = DateTimeOffset.UtcNow,
+        Notes = notes,
+        HasFlashKit = true,
+    };
+    db.FirmwareBuilds.Add(build);
+    try
+    {
+        await db.SaveChangesAsync();
+    }
+    catch
+    {
+        Cleanup();
+        throw;
+    }
+    return Results.Ok(new FirmwareBuildDto(build.Id, build.Version, build.SizeBytes, build.Sha256, build.CreatedAt, build.Notes, build.HasFlashKit));
+}
+
+adminGroup.MapFlashKit(firmwareStoragePath);
+
+adminGroup.MapGet("/firmware", async (HttpContext http, SynoraDbContext db) =>
+{
+    if (!IsAdmin(http))
+    {
+        return Results.Forbid();
+    }
+
+    var builds = await db.FirmwareBuilds
+        .OrderByDescending(f => f.CreatedAt)
+        .Select(f => new FirmwareBuildDto(f.Id, f.Version, f.SizeBytes, f.Sha256, f.CreatedAt, f.Notes, f.HasFlashKit))
+        .ToListAsync();
+    return Results.Ok(builds);
+});
+
+adminGroup.MapDelete("/firmware/{id:guid}", async (Guid id, HttpContext http, SynoraDbContext db, ILogger<Program> logger) =>
+{
+    if (!IsAdmin(http))
+    {
+        return Results.Forbid();
+    }
+
+    var build = await db.FirmwareBuilds.FirstOrDefaultAsync(f => f.Id == id);
+    if (build is null)
+    {
+        return Results.NotFound();
+    }
+
+    db.FirmwareBuilds.Remove(build);
+    await db.SaveChangesAsync();
+
+    // Row first, file second: a leftover .bin is harmless, a row pointing at a
+    // missing file would 404 a device mid-OTA.
+    var fullPath = Path.Combine(firmwareStoragePath, build.FileName);
+    var kitDir = FlashKitEndpoints.KitDir(firmwareStoragePath, build.Id);
+    try
+    {
+        File.Delete(fullPath);
+        if (Directory.Exists(kitDir)) Directory.Delete(kitDir, recursive: true);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        logger.LogWarning(ex, "Could not delete firmware files for build {Id}", build.Id);
+    }
+
+    return Results.NoContent();
+});
+
+// Unauthenticated -- the device has no user session to present here, and the
+// binary itself has no secrets baked in (no WiFi creds or keys, just
+// esp_crt_bundle's public CA list). Integrity is covered by the sha256 sent
+// alongside the download URL (commands/ota payload or BLE ota_start), which
+// esp_https_ota/the BLE commit path verify before flashing.
+app.MapGet("/firmware/{id:guid}/binary", async (Guid id, SynoraDbContext db) =>
+{
+    var build = await db.FirmwareBuilds.FirstOrDefaultAsync(f => f.Id == id);
+    if (build is null)
+    {
+        return Results.NotFound();
+    }
+
+    var fullPath = Path.Combine(firmwareStoragePath, build.FileName);
+    if (!File.Exists(fullPath))
+    {
+        return Results.NotFound();
+    }
+
+    return Results.File(fullPath, "application/octet-stream");
+});
+
+// Triggers the WiFi-OTA path (commands/ota, see MqttService) -- the BLE-push
+// fallback for a no-WiFi/unprovisioned device doesn't go through the server
+// at all, it's a direct app<->device GATT transfer.
+devicesGroup.MapPost("/{id:guid}/ota", async (
+    Guid id, SynoraDbContext db, HttpContext http, IDeviceMqttPublisher mqtt, TriggerOtaRequest request) =>
+{
+    var isAdmin = http.User.IsInRole(nameof(UserRole.Admin)) || http.User.IsInRole(nameof(UserRole.SuperAdmin));
+    var userId = CurrentUserId(http);
+    var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == id && (isAdmin || d.OwnerUserId == userId));
+    if (device is null)
+    {
+        return Results.NotFound();
+    }
+
+    var build = await db.FirmwareBuilds.FirstOrDefaultAsync(f => f.Id == request.FirmwareBuildId);
+    if (build is null)
+    {
+        return Results.BadRequest("Unknown firmware build.");
+    }
+
+    // PublishAsync silently drops when disconnected, so surface that instead of a false 200.
+    if (!mqtt.IsConnected)
+    {
+        return Results.Problem(
+            title: "MQTT broker unavailable",
+            detail: "The OTA command could not be delivered -- try again shortly.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var baseUrl = string.IsNullOrEmpty(firmwarePublicBaseUrl)
+        ? $"{http.Request.Scheme}://{http.Request.Host}"
+        : firmwarePublicBaseUrl;
+    var downloadUrl = $"{baseUrl}/firmware/{build.Id}/binary";
+    await mqtt.PublishOtaCommandAsync(id, build.Version, downloadUrl);
+    return Results.Ok();
+}).RequireAuthorization();
+
+// Landing-site CMS (/cms/*) -- endpoints + one-time legacy SQLite import live in Cms/.
+app.MapCms();
+
 app.Run();
 
 static async Task<List<TtsVoiceDto>?> FetchTtsVoicesAsync(IHttpClientFactory httpClientFactory, TtsOptions ttsOptions, CancellationToken ct)
@@ -1573,18 +2228,11 @@ static async Task<List<TtsVoiceDto>?> FetchTtsVoicesAsync(IHttpClientFactory htt
     }
 }
 
-static bool VerifyPassword(User? user, string password) =>
-    user?.PasswordHash is not null && user.PasswordSalt is not null &&
-    PasswordHasher.Verify(password, user.PasswordHash, user.PasswordSalt);
+// Moved to Auth/SessionAuth.cs so the landing CMS login (Cms/CmsEndpoints.cs)
+// shares the exact same password check and cookie principal shape.
+static bool VerifyPassword(User? user, string password) => SessionAuth.VerifyPassword(user, password);
 
-static ClaimsPrincipal BuildPrincipal(User user, string scheme) =>
-    new(new ClaimsIdentity(
-        [
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new Claim(ClaimTypes.Name, user.Username),
-            new Claim(ClaimTypes.Role, user.Role.ToString()),
-        ],
-        scheme));
+static ClaimsPrincipal BuildPrincipal(User user, string scheme) => SessionAuth.BuildPrincipal(user, scheme);
 
 static string IssueJwt(User user, string signingKey)
 {
@@ -1616,6 +2264,17 @@ static Guid CurrentUserId(HttpContext http) =>
 // inline role check directly) -- added for the newer /admin group so those
 // don't have to repeat it a fourth+ time; left the older call sites alone
 // rather than retrofitting them for an unrelated change.
+// Accepts "example.com", "https://example.com/" etc.; returns the bare host or null.
+static string? NormalizeDomain(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value)) return null;
+    var trimmed = value.Trim();
+    var host = Uri.TryCreate(trimmed.Contains("://") ? trimmed : $"https://{trimmed}", UriKind.Absolute, out var uri)
+        ? uri.Authority
+        : trimmed.TrimEnd('/');
+    return host.Length > 0 ? host : null;
+}
+
 static bool IsAdmin(HttpContext http) =>
     http.User.IsInRole(nameof(UserRole.Admin)) || http.User.IsInRole(nameof(UserRole.SuperAdmin));
 
@@ -1638,7 +2297,11 @@ record UpdateProfileRequest(string? Email);
 record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 record ResetPasswordRequest(string NewPassword);
 record TriggerWaterRequest(int DurationSeconds);
+record TriggerOtaRequest(Guid FirmwareBuildId);
 record SetMutedRequest(bool Muted);
+// ReplyAudioWavBase64 is null when TTS synthesis failed -- the app should
+// still show/read the transcript+reply text, just skip audio playback.
+record AssistantTurnResponse(string Transcript, string Reply, string? ReplyAudioWavBase64);
 record TelemetryRequest(
     double? TemperatureCelsius,
     double? HumidityPercent,
@@ -1672,7 +2335,24 @@ record DiscussionMessageDto(
     string SessionId,
     string UserText,
     string AssistantText,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    bool HasUserAudio);
+
+record MicTestUploadDto(
+    Guid Id,
+    Guid DeviceId,
+    string DeviceName,
+    DateTimeOffset CreatedAt,
+    long SizeBytes);
+
+record FirmwareBuildDto(
+    Guid Id,
+    string Version,
+    long SizeBytes,
+    string Sha256,
+    DateTimeOffset CreatedAt,
+    string? Notes,
+    bool HasFlashKit);
 
 // Named records, not anonymous types, for GET /devices and GET /devices/{id}
 // -- Swashbuckle can't generate a valid $ref name for an anonymous type that
@@ -1692,7 +2372,24 @@ record DeviceSummaryDto(
     string CareSuggestion,
     bool IsOnline,
     string? XiaozhiActivationCode,
-    bool Muted);
+    bool Muted,
+    string? FirmwareVersion);
+
+// GET /admin/duplicate-devices -- one row per device sharing a normalized
+// MAC with at least one other device, grouped under that MAC. HasRelatedData
+// is true if the device has any SensorReadings or WateringSchedules, the
+// same condition DELETE /admin/devices/{id} (hard delete) refuses on.
+record DuplicateDeviceGroupDto(string NormalizedMacAddress, List<DuplicateDeviceDto> Devices);
+
+record DuplicateDeviceDto(
+    Guid Id,
+    string? MacAddress,
+    string Name,
+    Guid? OwnerUserId,
+    string? OwnerEmail,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? PairedAt,
+    bool HasRelatedData);
 
 sealed class FacebookProfile
 {

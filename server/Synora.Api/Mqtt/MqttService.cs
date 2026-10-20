@@ -47,6 +47,8 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
     private static readonly JsonSerializerOptions TelemetryJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private readonly MqttOptions _options;
+    private readonly string _micTestStoragePath;
+    private readonly int _micTestMaxPayloadBytes;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly VoiceMqttDispatcher _voiceDispatcher;
     private readonly LowWaterAlertService _lowWaterAlerts;
@@ -58,12 +60,16 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
 
     public MqttService(
         IOptions<MqttOptions> options,
+        IOptions<MicTestUploadOptions> micTestUploadOptions,
         IServiceScopeFactory scopeFactory,
         VoiceMqttDispatcher voiceDispatcher,
         LowWaterAlertService lowWaterAlerts,
         ILogger<MqttService> logger)
     {
         _options = options.Value;
+        _micTestStoragePath = micTestUploadOptions.Value.StoragePath;
+        _micTestMaxPayloadBytes = micTestUploadOptions.Value.MaxPayloadBytes;
+        Directory.CreateDirectory(_micTestStoragePath);
         _scopeFactory = scopeFactory;
         _voiceDispatcher = voiceDispatcher;
         _lowWaterAlerts = lowWaterAlerts;
@@ -136,6 +142,7 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
             .WithTopicFilter(f => f.WithTopic($"{TopicPrefix}+/unlink").WithAtLeastOnceQoS())
             .WithTopicFilter(f => f.WithTopic($"{TopicPrefix}+/voice/control/up").WithAtLeastOnceQoS())
             .WithTopicFilter(f => f.WithTopic($"{TopicPrefix}+/voice/audio/up").WithAtMostOnceQoS())
+            .WithTopicFilter(f => f.WithTopic($"{TopicPrefix}+/mictest/upload").WithAtLeastOnceQoS())
             .Build(), ct);
 
     private async Task OnMessageReceivedAsync(MqttApplicationMessageReceivedEventArgs e)
@@ -162,6 +169,9 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
                     break;
                 case "voice/audio/up":
                     await _voiceDispatcher.HandleAudioAsync(deviceId, payload, CancellationToken.None);
+                    break;
+                case "mictest/upload":
+                    await HandleMicTestUploadAsync(deviceId, payload);
                     break;
             }
         }
@@ -233,6 +243,10 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
         device.XiaozhiActivationCode = string.IsNullOrEmpty(request.XiaozhiActivationCode)
             ? null
             : request.XiaozhiActivationCode;
+        if (!string.IsNullOrEmpty(request.FirmwareVersion))
+        {
+            device.FirmwareVersion = request.FirmwareVersion;
+        }
         await _lowWaterAlerts.CheckLowWaterAlertAsync(device, request.WaterLevelPercent);
         await db.SaveChangesAsync();
     }
@@ -253,6 +267,60 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
         await db.SaveChangesAsync();
 
         await PublishStateCoreAsync(deviceId, db, CancellationToken.None);
+    }
+
+    // The whole payload is already a complete, valid WAV file (44-byte
+    // canonical RIFF/WAVE header + raw PCM) -- the firmware's diagnostic
+    // `mictest` console command builds it before publishing, so this just
+    // writes it to disk and records a row, same file-on-disk-plus-path-column
+    // convention as Device.AvatarPath/DiscussionMessage.UserAudioPath. No
+    // envelope/chunking to unwrap, unlike voice/audio/up's Opus frames.
+    private async Task HandleMicTestUploadAsync(Guid deviceId, byte[] payload)
+    {
+        if (payload.Length == 0)
+        {
+            _logger.LogWarning("Empty mictest upload for device {DeviceId}, ignoring", deviceId);
+            return;
+        }
+        if (payload.Length > _micTestMaxPayloadBytes)
+        {
+            _logger.LogWarning(
+                "mictest upload for device {DeviceId} is {Size} bytes, over the {Max}-byte cap, ignoring",
+                deviceId, payload.Length, _micTestMaxPayloadBytes);
+            return;
+        }
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<SynoraDbContext>();
+
+        var deviceExists = await db.Devices.AnyAsync(d => d.Id == deviceId);
+        if (!deviceExists)
+        {
+            _logger.LogWarning("mictest upload for unknown device {DeviceId}", deviceId);
+            return;
+        }
+
+        var fileName = $"{deviceId}-{Guid.NewGuid():N}.wav";
+        var fullPath = Path.Combine(_micTestStoragePath, fileName);
+        try
+        {
+            await File.WriteAllBytesAsync(fullPath, payload);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to write mictest upload for device {DeviceId}", deviceId);
+            return;
+        }
+
+        db.MicTestUploads.Add(new MicTestUpload
+        {
+            DeviceId = deviceId,
+            FilePath = fileName,
+            SizeBytes = payload.LongLength,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        _logger.LogInformation("Stored mictest upload for device {DeviceId} ({Size} bytes)", deviceId, payload.LongLength);
     }
 
     // --- IDeviceMqttPublisher (called from Program.cs's authenticated endpoints) ---
@@ -314,6 +382,14 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
             retain: false,
             ct);
 
+    public Task PublishOtaCommandAsync(Guid deviceId, string version, string downloadUrl, CancellationToken ct = default) =>
+        PublishAsync(
+            $"{TopicPrefix}{deviceId}/commands/ota",
+            JsonSerializer.Serialize(new { version, url = downloadUrl }),
+            MqttQualityOfServiceLevel.AtLeastOnce,
+            retain: false,
+            ct);
+
     // --- IVoicePublisher (VoiceSession's send side, see the class doc comment
     // above for why this is a direct interface implementation rather than a
     // separate class depending on this one) ---
@@ -367,5 +443,6 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
         double? HumidityPercent,
         double? SoilMoisturePercent,
         double? WaterLevelPercent,
-        string? XiaozhiActivationCode = null);
+        string? XiaozhiActivationCode = null,
+        string? FirmwareVersion = null);
 }

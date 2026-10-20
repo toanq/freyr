@@ -1,0 +1,12 @@
+{
+  "id": "session-1792398310870",
+  "startedAt": "2026-10-19T08:25:10.870Z",
+  "cwd": "/home/toan/bench/toan/synora/server/Synora.Api",
+  "context": {},
+  "metrics": {
+    "edits": 10,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  }
+}

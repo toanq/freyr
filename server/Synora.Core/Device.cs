@@ -53,4 +53,10 @@ public class Device
     // there). Stored so the web UI can show it without reading the device's
     // own tiny screen.
     public string? XiaozhiActivationCode { get; set; }
+
+    // The running firmware's esp_app_desc_t version string, updated on every
+    // telemetry POST (see MqttService.HandleTelemetryAsync) -- lets the app
+    // show "up to date" vs. the latest FirmwareBuild without asking the
+    // device directly.
+    public string? FirmwareVersion { get; set; }
 }

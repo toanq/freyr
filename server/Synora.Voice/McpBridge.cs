@@ -50,9 +50,43 @@ public sealed class McpBridge
     /// Tools declared by this device, discovering (and caching) them on first
     /// use. Never throws -- a device that doesn't answer just yields an empty
     /// list, so a turn without MCP support still gets a normal LLM reply.
+    ///
+    /// A successful discovery (this device's firmware always advertises at
+    /// least one tool) is cached for the process lifetime, per the class doc.
+    /// But a *failed* discovery (device didn't respond to `initialize`/
+    /// `tools/list` in time -- e.g. the hello-triggered background prefetch in
+    /// VoiceMqttDispatcher racing the device's own control-session setup)
+    /// must NOT be cached that way: confirmed live, a single early timeout
+    /// permanently poisoned this device's entry with an empty list, silently
+    /// disabling every MCP tool (including self.do_watering) for every
+    /// subsequent conversation turn for the rest of the server process's
+    /// life, even once the device was clearly responsive again. So an empty
+    /// result is evicted immediately, letting the next call retry fresh.
     /// </summary>
-    public Task<IReadOnlyList<McpToolDefinition>> GetToolsAsync(Guid deviceId, VoiceSession session, CancellationToken ct) =>
-        _toolsCache.GetOrAdd(deviceId, _ => DiscoverToolsAsync(deviceId, session, ct));
+    public async Task<IReadOnlyList<McpToolDefinition>> GetToolsAsync(Guid deviceId, VoiceSession session, CancellationToken ct)
+    {
+        var task = _toolsCache.GetOrAdd(deviceId, _ => DiscoverToolsAsync(deviceId, session, ct));
+        IReadOnlyList<McpToolDefinition> tools;
+        try
+        {
+            tools = await task;
+        }
+        catch
+        {
+            // Faulted/canceled discovery must not stay cached either.
+            EvictCachedTools(deviceId, task);
+            throw;
+        }
+        if (tools.Count == 0)
+        {
+            EvictCachedTools(deviceId, task);
+        }
+        return tools;
+    }
+
+    private void EvictCachedTools(Guid deviceId, Task<IReadOnlyList<McpToolDefinition>> task) =>
+        ((ICollection<KeyValuePair<Guid, Task<IReadOnlyList<McpToolDefinition>>>>)_toolsCache)
+            .Remove(new KeyValuePair<Guid, Task<IReadOnlyList<McpToolDefinition>>>(deviceId, task));
 
     /// <summary>
     /// Invoke one tool on the device and return its JSON-RPC response

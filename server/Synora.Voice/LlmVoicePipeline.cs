@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Synora.Core;
 using Synora.Infrastructure;
 using Synora.Protocol;
@@ -37,7 +38,12 @@ public sealed class LlmVoicePipeline : IVoicePipeline
     // same prompt rather than a hand-copied (and driftable) duplicate.
     public const string SystemPrompt =
         "You are Synora, a friendly plant-care voice assistant. Always reply in Vietnamese (Tiếng Việt), " +
-        "regardless of what language the user's message is in. Keep replies short and conversational.";
+        "regardless of what language the user's message is in. Keep replies short and conversational. " +
+        "You only discuss the plant, its pot/device, and sensor readings/status (temperature, humidity, " +
+        "soil moisture, water level, watering) -- use your tools for these whenever they'd give a more " +
+        "accurate answer than guessing. If the user asks about anything else (general knowledge, other " +
+        "people/topics, requests unrelated to this plant or device), politely decline in one short " +
+        "sentence and steer back to the plant -- do not answer the off-topic question itself.";
 
     // Per-session capture buffer, same shape/reasoning as LoopbackPipeline.
     private readonly ConcurrentDictionary<string, List<byte[]>> _capture = new();
@@ -47,10 +53,11 @@ public sealed class LlmVoicePipeline : IVoicePipeline
     private readonly McpBridge _mcpBridge;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<LlmVoicePipeline> _logger;
+    private readonly string _recordingsStoragePath;
 
     public LlmVoicePipeline(
         ISpeechToText speechToText, ILlmClient llmClient, ITextToSpeech textToSpeech, McpBridge mcpBridge,
-        IServiceScopeFactory scopeFactory, ILogger<LlmVoicePipeline> logger)
+        IServiceScopeFactory scopeFactory, ILogger<LlmVoicePipeline> logger, IOptions<VoiceRecordingOptions> recordingOptions)
     {
         _speechToText = speechToText;
         _llmClient = llmClient;
@@ -58,6 +65,8 @@ public sealed class LlmVoicePipeline : IVoicePipeline
         _mcpBridge = mcpBridge;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _recordingsStoragePath = recordingOptions.Value.StoragePath;
+        Directory.CreateDirectory(_recordingsStoragePath);
     }
 
     public Task OnSessionStartAsync(VoiceSession session, CancellationToken ct)
@@ -118,7 +127,40 @@ public sealed class LlmVoicePipeline : IVoicePipeline
         await session.SendJsonAsync(ServerMessages.Tts("stop", session.SessionId), ct);
         frames.Clear();
 
-        await PersistDiscussionAsync(session, userText, assistantText, ct);
+        // Written from the same decoded `pcm` STT ran on, before it goes out
+        // of scope -- so playback matches exactly what was transcribed,
+        // letting the web console's Discussions view compare "what was
+        // actually said" against "what STT parsed it as" to spot
+        // transcription errors.
+        var userAudioFileName = TryWriteUserAudio(session.SessionId, pcm);
+
+        await PersistDiscussionAsync(session, userText, assistantText, userAudioFileName, ct);
+    }
+
+    // Best-effort, like PersistDiscussionAsync below: a failure to write the
+    // recording (disk full, permissions) shouldn't take down the turn or
+    // lose the transcript/reply. Null pcm (empty capture -- e.g. the user
+    // never actually spoke before stop) just skips the file entirely rather
+    // than writing an empty WAV.
+    private string? TryWriteUserAudio(string sessionId, short[] pcm)
+    {
+        if (pcm.Length == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            var fileName = $"{sessionId}-{Guid.NewGuid():N}.wav";
+            var fullPath = Path.Combine(_recordingsStoragePath, fileName);
+            File.WriteAllBytes(fullPath, OpusAudioDecoder.BuildWav(pcm, SampleRateHz));
+            return fileName;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to write user audio recording for session {SessionId}", sessionId);
+            return null;
+        }
     }
 
     public Task OnAbortAsync(VoiceSession session, CancellationToken ct)
@@ -132,7 +174,8 @@ public sealed class LlmVoicePipeline : IVoicePipeline
 
     // LlmVoicePipeline is a singleton but SynoraDbContext is scoped, so a
     // fresh scope is created per turn to resolve it.
-    private async Task PersistDiscussionAsync(VoiceSession session, string userText, string assistantText, CancellationToken ct)
+    private async Task PersistDiscussionAsync(
+        VoiceSession session, string userText, string assistantText, string? userAudioFileName, CancellationToken ct)
     {
         // VoiceSession.DeviceId is the server-assigned Device.Id guid, taken
         // straight from the MQTT topic (synora/devices/{deviceId}/voice/...)
@@ -158,6 +201,7 @@ public sealed class LlmVoicePipeline : IVoicePipeline
                 UserText = userText,
                 AssistantText = assistantText,
                 CreatedAt = DateTimeOffset.UtcNow,
+                UserAudioPath = userAudioFileName,
             });
             await db.SaveChangesAsync(ct);
         }

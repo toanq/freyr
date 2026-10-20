@@ -23,4 +23,12 @@ public interface IDeviceMqttPublisher
 
     /// <summary>Publish a one-shot ping on <c>synora/devices/{id}/commands/ping</c>.</summary>
     Task PublishPingCommandAsync(Guid deviceId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Publish a WiFi-OTA trigger on <c>synora/devices/{id}/commands/ota</c> --
+    /// the device compares <paramref name="version"/> against its own running
+    /// version and, if different, downloads <paramref name="downloadUrl"/> via
+    /// esp_https_ota. Fire-and-forget, same as water/ping -- no ack channel.
+    /// </summary>
+    Task PublishOtaCommandAsync(Guid deviceId, string version, string downloadUrl, CancellationToken ct = default);
 }

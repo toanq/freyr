@@ -154,6 +154,32 @@ public sealed class VoiceMqttDispatcher : IDisposable
         await _pipeline.OnAudioAsync(entry.Session, opus, ct);
     }
 
+    /// <summary>
+    /// Returns the currently live session for this device if one exists
+    /// (reused as-is -- e.g. an in-progress real voice turn), or creates and
+    /// registers a fresh ad-hoc one. For callers that need to reach a
+    /// device's MCP tools outside of a real device-initiated "hello" turn
+    /// (see the admin chat-test endpoint in Synora.Api's Program.cs).
+    ///
+    /// Registering the session in <see cref="_sessions"/> here (rather than
+    /// just handing back a bare <c>new VoiceSession(...)</c>) isn't cosmetic:
+    /// <see cref="HandleControlAsync"/>'s non-"hello" branches -- including
+    /// the "mcp" case <see cref="McpBridge"/> depends on for tool
+    /// discovery/call responses -- all gate on <c>_sessions.TryGetValue</c>
+    /// first and silently drop the message otherwise. An unregistered
+    /// session's outgoing MCP request reaches the device fine, but the
+    /// device's reply then has nowhere to land and the call times out.
+    /// Confirmed live: this exact bug, via the admin chat's ad-hoc tool
+    /// calls, before this method existed.
+    /// </summary>
+    public VoiceSession GetOrCreateSession(Guid deviceId, IVoicePublisher publisher)
+    {
+        var entry = _sessions.GetOrAdd(deviceId, static (id, pub) => new SessionEntry(new VoiceSession(
+            id, Guid.NewGuid().ToString("N"), protocolVersion: 2, ServerSampleRate, ServerFrameDurationMs, pub)), publisher);
+        entry.Touch();
+        return entry.Session;
+    }
+
     private async Task DiscoverToolsInBackgroundAsync(Guid deviceId, VoiceSession session, CancellationToken ct)
     {
         try

@@ -13,6 +13,8 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Google.Apis.Auth" Version="1.75.0" />
+    <!-- Read-only use: one-time import of the former Rust landing CMS's SQLite DB (Cms/CmsLegacyImporter.cs). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.4" />
     <PackageReference Include="MQTTnet" Version="5.2.0.1603" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
   </ItemGroup>

@@ -69,6 +69,15 @@ public sealed class DeepSeekLlmClient : ILlmClient
             new("user", userText),
         };
 
+        // Tracks whether any tool actually ran this turn -- shapes which
+        // fallback text below fits if the model then returns empty content,
+        // which does happen occasionally (model-dependent) right after a
+        // successful tool call. Confirmed live: a real self.do_watering call
+        // ran fine, but the model's follow-up message came back blank, and
+        // the literal "(no reply)" placeholder that used to fill that gap
+        // would otherwise have been spoken/shown to the user verbatim.
+        var usedTool = false;
+
         try
         {
             for (int round = 0; round < MaxToolRounds; round++)
@@ -83,7 +92,13 @@ public sealed class DeepSeekLlmClient : ILlmClient
                 if (message is null || message.ToolCalls is not { Length: > 0 } toolCalls)
                 {
                     var reply = message?.Content;
-                    return string.IsNullOrWhiteSpace(reply) ? "(no reply)" : reply.Trim();
+                    if (!string.IsNullOrWhiteSpace(reply))
+                    {
+                        return reply.Trim();
+                    }
+                    return usedTool
+                        ? "Xong rồi nhé!"
+                        : "Xin lỗi, mình chưa nghĩ ra câu trả lời, bạn hỏi lại được không?";
                 }
 
                 // Echo the assistant's tool-call request back into the
@@ -91,6 +106,7 @@ public sealed class DeepSeekLlmClient : ILlmClient
                 // the follow-up "tool" messages below have something to
                 // attach to), then execute each requested call and append its
                 // result before looping back for the model's next turn.
+                usedTool = true;
                 messages.Add(message);
                 foreach (var call in toolCalls)
                 {
@@ -100,12 +116,12 @@ public sealed class DeepSeekLlmClient : ILlmClient
             }
 
             _logger.LogWarning("LLM tool-calling loop exceeded {MaxRounds} rounds without a final reply", MaxToolRounds);
-            return "Sorry, I couldn't complete that action.";
+            return "Xin lỗi, mình chưa hoàn tất được yêu cầu đó.";
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             _logger.LogWarning(ex, "LLM call failed.");
-            return "Sorry, I couldn't think of a reply just now.";
+            return "Xin lỗi, mình chưa nghĩ ra câu trả lời lúc này.";
         }
     }
 

@@ -13,4 +13,11 @@ public class DiscussionMessage
     public required string UserText { get; set; }
     public required string AssistantText { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
+
+    // Filename (not a full path) of the WAV recording of what the user
+    // actually said, stored under Recordings:StoragePath -- same
+    // file-on-disk-plus-path-column convention as Device.AvatarPath/
+    // User.AvatarPath. Null for turns captured before this field existed,
+    // or when the capture buffer was empty (e.g. abort-timing edge cases).
+    public string? UserAudioPath { get; set; }
 }

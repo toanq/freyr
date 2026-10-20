@@ -11,6 +11,10 @@ public class SynoraDbContext(DbContextOptions<SynoraDbContext> options) : DbCont
     public DbSet<WateringSchedule> WateringSchedules => Set<WateringSchedule>();
     public DbSet<DiscussionMessage> DiscussionMessages => Set<DiscussionMessage>();
     public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
+    public DbSet<MicTestUpload> MicTestUploads => Set<MicTestUpload>();
+    public DbSet<FirmwareBuild> FirmwareBuilds => Set<FirmwareBuild>();
+    public DbSet<CmsPost> CmsPosts => Set<CmsPost>();
+    public DbSet<CmsOrder> CmsOrders => Set<CmsOrder>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -54,6 +58,34 @@ public class SynoraDbContext(DbContextOptions<SynoraDbContext> options) : DbCont
                   .WithMany()
                   .HasForeignKey(m => m.DeviceId)
                   .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MicTestUpload>(entity =>
+        {
+            entity.HasIndex(m => new { m.DeviceId, m.CreatedAt });
+            entity.HasOne(m => m.Device)
+                  .WithMany()
+                  .HasForeignKey(m => m.DeviceId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FirmwareBuild>(entity =>
+        {
+            entity.HasIndex(f => f.Version).IsUnique();
+        });
+
+        // Landing-site CMS (see CmsPost/CmsOrder); indexes mirror the
+        // former Rust CMS's SQLite schema.
+        modelBuilder.Entity<CmsPost>(entity =>
+        {
+            entity.HasIndex(p => p.Slug).IsUnique();
+            entity.HasIndex(p => new { p.Published, p.PublishedAt });
+            entity.HasIndex(p => p.Category);
+        });
+
+        modelBuilder.Entity<CmsOrder>(entity =>
+        {
+            entity.HasIndex(o => new { o.Status, o.CreatedAt });
         });
 
         // Seeded once via migration so GET /admin/system-settings can rely
