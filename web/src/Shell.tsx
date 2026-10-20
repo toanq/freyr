@@ -13,6 +13,8 @@ import { useI18n, type StringKey } from './i18n'
 import { LanguageToggle } from './I18nProvider'
 import AppBarAvatar from './account/AppBarAvatar'
 import Profile from './account/Profile'
+import Orders from './cms/Orders'
+import Posts from './cms/Posts'
 
 type Session = { username: string; role: string }
 type View =
@@ -24,11 +26,39 @@ type View =
   | 'system-config'
   | 'duplicate-devices'
   | 'mictest-uploads'
+  | 'orders'
+  | 'posts'
   | 'profile'
 
+const ADMIN_TABS: View[] = ['firmware', 'orders', 'posts', 'dashboard', 'admin-test', 'duplicate-devices', 'mictest-uploads']
+const SUPERADMIN_TABS: View[] = ['users', 'system-config']
+
+// ?tab=<view> keeps the current tab across reloads and shared links (e.g.
+// ?tab=posts&post=<id> opens the CMS editor). Unknown or not-allowed tabs
+// fall back to the device list.
+function initialView(isAdmin: boolean, isSuperAdmin: boolean): View {
+  const params = new URLSearchParams(window.location.search)
+  if (params.has('device')) return 'devices'
+  const tab = (params.get('tab') ?? (params.has('post') ? 'posts' : null)) as View | null
+  if (tab && isAdmin && ADMIN_TABS.includes(tab)) return tab
+  if (tab && isSuperAdmin && SUPERADMIN_TABS.includes(tab)) return tab
+  return 'devices'
+}
+
 function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => void }) {
-  const [view, setView] = useState<View>('devices')
+  const isAdmin = session.role === 'Admin' || session.role === 'SuperAdmin'
+  const isSuperAdmin = session.role === 'SuperAdmin'
+  const [view, setViewState] = useState<View>(() => initialView(isAdmin, isSuperAdmin))
   const { t } = useI18n()
+
+  // Switching tabs replaces the URL (no new history entry) and drops any
+  // sub-page params (?device=, ?post=) that belong to the previous tab.
+  const setView = (next: View) => {
+    const url = new URL(window.location.href)
+    url.search = next === 'devices' || next === 'profile' ? '' : `?tab=${next}`
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+    setViewState(next)
+  }
 
   useEffect(() => {
     void refreshPushToken()
@@ -41,12 +71,11 @@ function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => 
     onLoggedOut()
   }
 
-  const isAdmin = session.role === 'Admin' || session.role === 'SuperAdmin'
-  const isSuperAdmin = session.role === 'SuperAdmin'
-
   const tabs: { id: View; label: StringKey; visible: boolean }[] = [
     { id: 'devices', label: 'tab.devices', visible: true },
     { id: 'firmware', label: 'tab.firmware', visible: isAdmin },
+    { id: 'orders', label: 'tab.orders', visible: isAdmin },
+    { id: 'posts', label: 'tab.posts', visible: isAdmin },
     { id: 'dashboard', label: 'tab.status', visible: isAdmin },
     { id: 'users', label: 'tab.users', visible: isSuperAdmin },
     { id: 'admin-test', label: 'tab.adminTest', visible: isAdmin },
@@ -85,6 +114,8 @@ function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => 
       <main className="shell-content">
         {view === 'dashboard' && isAdmin && <Dashboard />}
         {view === 'firmware' && isAdmin && <Firmware />}
+        {view === 'orders' && isAdmin && <Orders />}
+        {view === 'posts' && isAdmin && <Posts />}
         {view === 'devices' && <Devices isAdmin={isAdmin} />}
         {view === 'users' && isSuperAdmin && <Users />}
         {view === 'admin-test' && isAdmin && <AdminTest />}

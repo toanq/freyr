@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
@@ -386,6 +387,42 @@ public class CmsEndpointTests(WebApplicationFactory<Program> factory) : IClassFi
 
     private static StringContent Json<T>(T value) =>
         new(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json");
+
+    // The web console manages orders/posts with its normal /auth/login cookie,
+    // so a regular user's cookie session must be refused on every CMS admin
+    // write as well as the reads covered above, while an admin's is accepted.
+    [Fact]
+    public async Task AdminEndpoints_WithConsoleCookieSession_RequireAdminRole()
+    {
+        var client = CreateClient(out var dbName, out _);
+        await SeedUserAsync(dbName, "plain", "s3cret!", UserRole.User);
+        await SeedUserAsync(dbName, "boss", "s3cret!", UserRole.Admin);
+        var someId = Guid.NewGuid();
+
+        Assert.Equal(HttpStatusCode.OK,
+            (await client.PostAsJsonContent("/auth/login", new { username = "plain", password = "s3cret!" })).StatusCode);
+        var asUser = new (string Method, string Url, HttpContent? Body)[]
+        {
+            ("GET", "/cms/admin/orders", null),
+            ("POST", $"/cms/admin/orders/{someId}/status", JsonContent.Create(new { status = "done" })),
+            ("GET", "/cms/admin/posts", null),
+            ("POST", "/cms/admin/posts", JsonContent.Create(new { slug = "x", title = "X", published = true })),
+            ("PUT", $"/cms/admin/posts/{someId}", JsonContent.Create(new { slug = "x", title = "X" })),
+            ("DELETE", $"/cms/admin/posts/{someId}", null),
+            ("POST", "/cms/admin/uploads", FileUpload([0x89, 0x50, 0x4E, 0x47], "image/png", "a.png")),
+        };
+        foreach (var (method, url, body) in asUser)
+        {
+            var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), url) { Content = body });
+            Assert.True(response.StatusCode == HttpStatusCode.Forbidden, $"{method} {url} -> {response.StatusCode}");
+        }
+
+        await client.PostAsync("/auth/logout", null);
+        Assert.Equal(HttpStatusCode.OK,
+            (await client.PostAsJsonContent("/auth/login", new { username = "boss", password = "s3cret!" })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/cms/admin/orders")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/cms/admin/posts")).StatusCode);
+    }
 
     private HttpClient CreateClient(out string dbName, out string uploadsDir)
     {

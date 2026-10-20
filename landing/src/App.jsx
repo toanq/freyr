@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
-import { Route, Routes } from 'react-router-dom'
-import AdminApp from './pages/admin/AdminApp.jsx'
+import { Navigate, Route, Routes } from 'react-router-dom'
 import Home from './pages/Home.jsx'
 import NewsPage from './pages/NewsPage.jsx'
 import OrderPage from './pages/OrderPage.jsx'
@@ -13,8 +12,9 @@ export default function App() {
       <Route path="/dat-hang" element={<OrderPage />} />
       <Route path="/tin-tuc" element={<NewsPage />} />
       <Route path="/tin-tuc/:slug" element={<PostPage />} />
-      <Route path="/admin/*" element={<AdminApp />} />
       <Route path="/login" element={<ConsoleRedirect />} />
+      {/* Unknown paths (e.g. old /admin links) go home instead of rendering an empty page. */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }

@@ -35,6 +35,33 @@
   color: var(--green);
 }
 
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.breadcrumb a {
+  color: var(--muted);
+}
+
+.breadcrumb a:hover {
+  color: var(--green);
+}
+
+.breadcrumb__sep {
+  margin-right: 6px;
+  opacity: 0.6;
+}
+
+.breadcrumb__current {
+  color: var(--green-dark);
+  font-weight: 500;
+}
+
 .breadcrumb--public {
   padding-top: 20px;
 }
