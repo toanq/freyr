@@ -17,6 +17,7 @@ not guessed -- pip install vieneu on the host to inspect it yourself if
 this ever needs updating for a new vieneu version.
 """
 import os
+import shutil
 import sys
 import time
 
@@ -46,6 +47,32 @@ CODEC_FILES = [
 
 MAX_ATTEMPTS = 5
 RETRY_DELAY_S = 3
+
+
+def materialize_symlinks(root):
+    """Replace every symlink under root with a real copy of its target.
+
+    hf_hub_download's cache layout stores each file's actual bytes under
+    blobs/<hash-prefix>/<hash> and symlinks snapshots/<revision>/<filename>
+    to it -- normal and harmless for most consumers, but onnxruntime's
+    external-data loader rejects it: a multi-file ONNX model (e.g.
+    vieneu_prefill.onnx + vieneu_backbone_shared.data) has its files land
+    under *different* blob hash-prefix directories, and onnxruntime's
+    security check requires external-data references to resolve inside the
+    same directory as the main model file -- "External data path escapes
+    model directory" (confirmed live). De-symlinking here so the snapshot
+    directory holds real, co-located files fixes this; the orphaned blobs/
+    directory is left in place (harmless extra disk use, not worth the
+    complexity of reference-counted cleanup for a handful of model files).
+    """
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path):
+                target = os.path.realpath(path)
+                os.remove(path)
+                shutil.copyfile(target, path)
+                print(f"materialized {path} (was -> {target})")
 
 
 def download_all(repo, files, subfolder=None):
@@ -82,4 +109,5 @@ if __name__ == "__main__":
     os.makedirs(CACHE_DIR, exist_ok=True)
     download_all(BACKBONE_REPO, BACKBONE_FILES, subfolder=BACKBONE_SUBFOLDER)
     download_all(CODEC_REPO, CODEC_FILES)
+    materialize_symlinks(CACHE_DIR)
     print("All files downloaded.")

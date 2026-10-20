@@ -9,3 +9,4 @@ https://www.svgrepo.com/svg/506329/speaker-2
 https://www.svgrepo.com/svg/506328/speaker-cross
 https://www.svgrepo.com/svg/532897/wifi-slash
 https://www.svgrepo.com/svg/532893/wifi
+https://www.svgrepo.com/svg/533110/microphone
