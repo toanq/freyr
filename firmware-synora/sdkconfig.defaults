@@ -25,7 +25,7 @@ CONFIG_MBEDTLS_SSL_RENEGOTIATION=n
 
 # Supplements (not replaces) the default certificate bundle with
 # certs/globalsign_root_ca.pem -- see that file's own comment for why:
-# Cloudflare's edge cert chain for synora.carcise.dev needs a root ESP-IDF's
+# Cloudflare's edge cert chain (seen on synora.carcise.dev) needs a root ESP-IDF's
 # bundle doesn't carry.
 CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="certs/globalsign_root_ca.pem"

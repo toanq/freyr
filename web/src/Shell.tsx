@@ -59,7 +59,7 @@ function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => 
   return (
     <div className="shell">
       <header className="app-bar">
-        <img className="app-bar-logo" src="/logo-green.jpg" alt="" />
+        <img className="app-bar-logo" src={`${import.meta.env.BASE_URL}logo-green.jpg`} alt="" />
         <span className="app-bar-title">Synora</span>
         <AppBarAvatar username={session.username} role={session.role} onOpen={() => setView('profile')} />
         <LanguageToggle />

@@ -1,6 +1,6 @@
 namespace Synora.Core;
 
-// A landing-site news/blog post (synora-landing.carcise.dev), managed via
+// A landing-site news/blog post (shown at / on synora.id.vn), managed via
 // the /cms/admin/posts endpoints and served publicly at /cms/posts. Ported
 // from the former standalone Rust CMS (landing/server) -- field set and
 // semantics match its `posts` table so the landing frontend's JSON contract

@@ -55,7 +55,7 @@ FONT_SIZES = {
                # blocky nearest-neighbor edges.
 }
 
-DOWNLOAD_URL = "https://synora.carcise.dev/downloads/"
+DOWNLOAD_URL = "https://synora.id.vn/downloads/"
 
 PAIRING_TITLE = "Dùng ứng dụng Synora để cài đặt thiết bị"
 PAIRING_HINT = "Mở ứng dụng Synora trên điện thoại để ghép nối thiết bị"

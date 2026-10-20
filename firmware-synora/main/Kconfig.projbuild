@@ -2,7 +2,7 @@ menu "Synora"
 
     config SYNORA_MQTT_BROKER_URI
         string "MQTT broker URI (device<->server link)"
-        default "wss://synora.carcise.dev/mqtt"
+        default "wss://synora.id.vn/mqtt"
         help
             Real hardware on the public internet can't resolve
             docker-compose's "mosquitto" service name or reach its port 1883

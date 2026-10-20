@@ -50,7 +50,7 @@ function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
       <div className="login-lang">
         <LanguageToggle />
       </div>
-      <img className="login-logo" src="/logo-green.jpg" alt="" />
+      <img className="login-logo" src={`${import.meta.env.BASE_URL}logo-green.jpg`} alt="" />
       <h1>Synora</h1>
       <p className="login-subtitle">{t('login.subtitle')}</p>
       {registering ? (

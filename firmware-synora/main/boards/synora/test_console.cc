@@ -222,7 +222,7 @@ static int CmdMicTest(int argc, char** argv) {
 // has configured for the WiFi station interface, so a live device can be
 // checked without waiting out esp-mqtt's own reconnect/retry cycle.
 static int CmdDns(int argc, char** argv) {
-    const char* host = argc > 1 ? argv[1] : "synora.carcise.dev";
+    const char* host = argc > 1 ? argv[1] : "synora.id.vn";
 
     esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (netif == nullptr) {
@@ -295,7 +295,7 @@ void InitializeTestConsole(SynoraBoard* board, AudioCodec* codec) {
 
     const esp_console_cmd_t dns_cmd = {
         .command = "dns",
-        .help = "Show configured DNS servers and resolve a hostname (default synora.carcise.dev)",
+        .help = "Show configured DNS servers and resolve a hostname (default synora.id.vn)",
         .hint = "[hostname]",
         .func = &CmdDns,
     };

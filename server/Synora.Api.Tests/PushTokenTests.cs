@@ -133,7 +133,7 @@ public class PushTokenTests(WebApplicationFactory<Program> factory) : IClassFixt
         Assert.All(sender.Sent, s =>
         {
             Assert.Equal(deviceId.ToString(), s.Message.Data!["deviceId"]);
-            Assert.Equal($"https://app.example.test/?device={deviceId}", s.Message.Link);
+            Assert.Equal($"https://app.example.test/app/?device={deviceId}", s.Message.Link);
         });
     }
 

@@ -42,7 +42,7 @@ public sealed class LowWaterAlertService(PushNotifier push, ILogger<LowWaterAler
                         "Mực nước thấp",
                         $"{device.Name} có mực nước còn {level:0}% (ngưỡng {critical}%).",
                         new Dictionary<string, string> { ["deviceId"] = device.Id.ToString() },
-                        push.AppLink($"/?device={device.Id}")));
+                        push.AppLink($"/app/?device={device.Id}")));
                     if (result.Failed > 0)
                     {
                         logger.LogWarning("Low-water alert for device {DeviceId}: {Failed} of {Attempted} sends failed",

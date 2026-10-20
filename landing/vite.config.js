@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: true,
-    allowedHosts: ['synora-landing.carcise.dev'],
+    allowedHosts: ['synora.id.vn'],
     proxy: {
       '/api': {
         target: synoraServer,
@@ -25,6 +25,6 @@ export default defineConfig({
   },
   preview: {
     host: true,
-    allowedHosts: ['synora-landing.carcise.dev'],
+    allowedHosts: ['synora.id.vn'],
   },
 })

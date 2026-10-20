@@ -1,3 +1,14 @@
+# One public domain (SYNORA_DOMAIN, e.g. synora.id.vn), routed by path:
+#   /            landing site (static nginx)            -> landing
+#   /app/        web console (static nginx, Vite base)  -> web
+#   /downloads/  APK downloads                          -> web
+#   /api/*       Synora API, /api stripped               -> server
+#                (the landing site calls /api/cms/* -> server /cms/*)
+#   /uploads/*   CMS images                             -> server /cms/uploads/*
+#   /mqtt        MQTT over WebSocket                    -> mosquitto
+# Routing is host-agnostic, so whatever hostname the Cloudflare tunnel sends
+# here works the same. Domains come from the traefik service env
+# (docker-compose.yml), read via Traefik's {{ env "..." }} templating.
 http:
   routers:
     api:
@@ -14,53 +25,71 @@ http:
         - web
       service: mqtt
       priority: 10
-    # Landing site: nginx serves only the static build; its API and uploaded
-    # images are the Synora server's /cms/* endpoints, routed here.
-    # LANDING_DOMAIN comes from the traefik service env (docker-compose.yml),
-    # e.g. synora-landing.carcise.dev.
-    landing-api:
-      rule: "Host(`{{ env "LANDING_DOMAIN" }}`) && PathPrefix(`/api/`)"
+    uploads:
+      rule: "PathPrefix(`/uploads/`)"
       entryPoints:
         - web
       service: api
-      priority: 30
-      middlewares:
-        - landing-api-to-cms
-    landing-uploads:
-      rule: "Host(`{{ env "LANDING_DOMAIN" }}`) && PathPrefix(`/uploads/`)"
-      entryPoints:
-        - web
-      service: api
-      priority: 30
+      priority: 10
       middlewares:
         - cms-prefix
-    landing:
-      rule: "Host(`{{ env "LANDING_DOMAIN" }}`)"
-      entryPoints:
-        - web
-      service: landing
-      priority: 20
-    web:
-      rule: "PathPrefix(`/`)"
+    console:
+      # Not PathPrefix(`/app`) alone -- that would also match e.g. /apple-*.
+      rule: "Path(`/app`) || PathPrefix(`/app/`) || PathPrefix(`/downloads`)"
       entryPoints:
         - web
       service: web
+      priority: 10
+    landing:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - web
+      service: landing
       priority: 1
+
+    # --- Transition from the old domains. Remove these two routers (and the
+    # LEGACY_* env on the traefik service) once no installed phone app or
+    # field device still uses synora.carcise.dev. ---
+    # Old console host: pages move to /app/ on the new domain. /api, /mqtt and
+    # /downloads keep being served directly (no redirect) because installed
+    # phone apps, devices' MQTT broker URI and the devices' QR code use them.
+    legacy-app-pages:
+      rule: "Host(`{{ env "LEGACY_APP_DOMAIN" }}`) && !PathPrefix(`/api`) && !PathPrefix(`/mqtt`) && !PathPrefix(`/downloads`)"
+      entryPoints:
+        - web
+      service: web
+      priority: 50
+      middlewares:
+        - legacy-app-redirect
+    # Old landing host: everything moves to the same path on the new domain.
+    legacy-landing:
+      rule: "Host(`{{ env "LEGACY_LANDING_DOMAIN" }}`)"
+      entryPoints:
+        - web
+      service: landing
+      priority: 50
+      middlewares:
+        - legacy-landing-redirect
 
   middlewares:
     api-stripprefix:
       stripPrefix:
         prefixes:
           - /api
-    # /api/<path> -> /cms/<path>
-    landing-api-to-cms:
-      replacePathRegex:
-        regex: "^/api/(.*)"
-        replacement: "/cms/$1"
     # /uploads/<file> -> /cms/uploads/<file>
     cms-prefix:
       addPrefix:
         prefix: /cms
+    legacy-app-redirect:
+      redirectRegex:
+        regex: "^https?://[^/]+/(.*)"
+        replacement: "https://{{ env "SYNORA_DOMAIN" }}/app/${1}"
+        permanent: true
+    legacy-landing-redirect:
+      redirectRegex:
+        regex: "^https?://[^/]+/(.*)"
+        replacement: "https://{{ env "SYNORA_DOMAIN" }}/${1}"
+        permanent: true
 
   services:
     api:

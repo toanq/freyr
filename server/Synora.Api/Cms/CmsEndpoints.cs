@@ -11,7 +11,7 @@ using Synora.Infrastructure;
 
 namespace Synora.Api.Cms;
 
-// Landing-site CMS (synora-landing.carcise.dev), ported from the former
+// Landing-site CMS (served at / on synora.id.vn), ported from the former
 // standalone Rust service (landing/server). Every route sits under /cms; the
 // landing nginx maps its public /api/* -> /cms/* and /uploads/* ->
 // /cms/uploads/*, so the landing frontend's paths and JSON are unchanged.

@@ -33,9 +33,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
-// Public hostnames, e.g. Domain:App = synora.carcise.dev (web console + /api),
-// Domain:Landing = synora-landing.carcise.dev (landing + /cms). Set via
-// SYNORA_DOMAIN / LANDING_DOMAIN in .env -> docker-compose -> Domain__App/__Landing.
+// Public hostname, e.g. Domain:App = synora.id.vn (landing at /, console at
+// /app/, API at /api). Set via SYNORA_DOMAIN in .env -> docker-compose ->
+// Domain__App. Domain:Landing is optional, only for a separately hosted landing site.
 var appDomain = NormalizeDomain(builder.Configuration["Domain:App"]);
 var landingDomain = NormalizeDomain(builder.Configuration["Domain:Landing"]);
 
@@ -226,7 +226,7 @@ var facebookAppSecret = app.Configuration["OAuth:Facebook:AppSecret"];
 var facebookConfigured = !string.IsNullOrEmpty(facebookAppId) && !string.IsNullOrEmpty(facebookAppSecret);
 var firebaseServiceAccountJson = app.Configuration["Firebase:ServiceAccountJson"];
 var firebaseConfigured = !string.IsNullOrEmpty(firebaseServiceAccountJson);
-// Public URL devices reach this API at (e.g. https://synora.carcise.dev/api) -- the
+// Public URL devices reach this API at (e.g. https://synora.id.vn/api) -- the
 // request's own Scheme/Host is wrong behind Cloudflare+Traefik (http, /api stripped).
 // Explicit Firmware:PublicBaseUrl wins; otherwise derived from Domain:App.
 var firmwarePublicBaseUrl = app.Configuration["Firmware:PublicBaseUrl"]?.Trim().TrimEnd('/') is { Length: > 0 } explicitFirmwareUrl

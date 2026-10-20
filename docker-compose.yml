@@ -12,8 +12,12 @@ services:
       # from elsewhere via `ssh -L 8080:127.0.0.1:8080 <host>`.
       - "127.0.0.1:8080:8080"
     environment:
-      # Read by traefik/dynamic.yml's {{ env "LANDING_DOMAIN" }} template.
-      LANDING_DOMAIN: ${LANDING_DOMAIN:-synora-landing.carcise.dev}
+      # Read by traefik/dynamic.yml's {{ env "..." }} templates.
+      SYNORA_DOMAIN: ${SYNORA_DOMAIN:-synora.id.vn}
+      # Old hosts, redirected to SYNORA_DOMAIN except /api, /mqtt, /downloads
+      # on the old app host (installed phone apps and field devices use them).
+      LEGACY_APP_DOMAIN: ${LEGACY_APP_DOMAIN:-synora.carcise.dev}
+      LEGACY_LANDING_DOMAIN: ${LEGACY_LANDING_DOMAIN:-synora-landing.carcise.dev}
     volumes:
       - ./traefik/dynamic.yml:/etc/traefik/dynamic/dynamic.yml:ro
 
@@ -29,9 +33,9 @@ services:
       Recordings__StoragePath: "/data/recordings"
       MicTestUploads__StoragePath: "/data/mictest"
       Firmware__StoragePath: "/data/firmware"
-      # Public hostnames (see .env.example), e.g. synora.carcise.dev.
-      Domain__App: ${SYNORA_DOMAIN:-synora.carcise.dev}
-      Domain__Landing: ${LANDING_DOMAIN:-synora-landing.carcise.dev}
+      # Public hostname (see .env.example), e.g. synora.id.vn -- landing at /,
+      # console at /app/, API at /api.
+      Domain__App: ${SYNORA_DOMAIN:-synora.id.vn}
       # Optional OTA download base URL override; empty -> https://<Domain__App>/api.
       Firmware__PublicBaseUrl: ${FIRMWARE_PUBLIC_BASE_URL:-}
       # Landing-site CMS (/cms/*): uploaded images, plus the one-time import
@@ -145,21 +149,24 @@ services:
     depends_on:
       - server
 
-  # Static landing site (nginx). Traefik routes its /api/* and /uploads/* to
-  # the server's /cms/* endpoints (see traefik/dynamic.yml); admin login uses
+  # Static landing site (nginx) at / on the shared domain. It calls the CMS at
+  # /api/cms/* and loads images from /uploads/*; Traefik routes both to the
+  # server's /cms/* endpoints (see traefik/dynamic.yml). Admin login uses
   # Synora Admin/SuperAdmin accounts.
   landing:
     build:
       context: ./landing
+      args:
+        VITE_API_URL: /api/cms
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     # Remotely-managed tunnel (token-based) -- ingress rules (which public
-    # hostname maps to which local address, e.g. synora.carcise.dev ->
-    # http://traefik:80) live in the Cloudflare dashboard for this tunnel,
-    # not in a local config.yml. This lets the already-installed phone app
-    # (hardcoded to https://synora.carcise.dev/api, see app/lib/api_client.dart)
-    # reach this locally-run stack without any app rebuild.
+    # hostname maps to which local address, e.g. synora.id.vn -> http://traefik:80,
+    # plus the old synora.carcise.dev / synora-landing.carcise.dev during the
+    # transition) live in the Cloudflare dashboard for this tunnel, not in a
+    # local config.yml. Phone apps built before the move are hardcoded to
+    # https://synora.carcise.dev/api; Traefik keeps serving that host's /api.
     # --protocol http2 forces TCP-based edge connections instead of QUIC
     # (cloudflared's default) -- QUIC (UDP) was dropping connIndex=3 every
     # 20-100s in this Docker setup ("control stream encountered a failure

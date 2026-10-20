@@ -1,7 +1,12 @@
 // App-shell cache only. API calls (/api/*) and APK downloads always go to the
 // network so device data and auth state are never served stale.
-const CACHE = 'synora-shell-v1'
-const SHELL = ['/', '/manifest.webmanifest', '/logo-green.jpg', '/icons/icon-192.png', '/icons/icon-512.png']
+const CACHE = 'synora-shell-v2'
+// The console is served under /app/ (landing site owns /); everything here is
+// relative to this worker's own directory so the base path lives in one place.
+const BASE = new URL('./', self.location.href).pathname
+const SHELL = [BASE, 'manifest.webmanifest', 'logo-green.jpg', 'icons/icon-192.png', 'icons/icon-512.png'].map((p) =>
+  p === BASE ? p : BASE + p,
+)
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)))
@@ -31,10 +36,10 @@ self.addEventListener('fetch', (event) => {
       fetch(request)
         .then((res) => {
           const copy = res.clone()
-          caches.open(CACHE).then((cache) => cache.put('/', copy))
+          caches.open(CACHE).then((cache) => cache.put(BASE, copy))
           return res
         })
-        .catch(() => caches.match('/')),
+        .catch(() => caches.match(BASE)),
     )
     return
   }
@@ -68,12 +73,12 @@ self.addEventListener('push', (event) => {
   const notification = payload.notification || {}
   const data = payload.data || {}
   const link =
-    (payload.fcmOptions && payload.fcmOptions.link) || (data.deviceId ? `/?device=${encodeURIComponent(data.deviceId)}` : '/')
+    (payload.fcmOptions && payload.fcmOptions.link) || (data.deviceId ? `${BASE}?device=${encodeURIComponent(data.deviceId)}` : BASE)
   event.waitUntil(
     self.registration.showNotification(notification.title || 'Synora', {
       body: notification.body || '',
-      icon: notification.icon || '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
+      icon: notification.icon || `${BASE}icons/icon-192.png`,
+      badge: `${BASE}icons/icon-192.png`,
       tag: data.deviceId ? `device-${data.deviceId}` : undefined,
       data: { link },
     }),
@@ -82,9 +87,9 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const target = new URL((event.notification.data && event.notification.data.link) || '/', self.location.origin)
+  const target = new URL((event.notification.data && event.notification.data.link) || BASE, self.location.origin)
   // Never navigate off-site, whatever the payload says.
-  const url = target.origin === self.location.origin ? target.href : self.location.origin + '/'
+  const url = target.origin === self.location.origin ? target.href : self.location.origin + BASE
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
       const open = windows.find((w) => new URL(w.url).origin === self.location.origin)
