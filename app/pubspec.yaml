@@ -47,6 +47,23 @@ dependencies:
   image_picker: ^1.1.2
   wakelock_plus: ^1.2.10
 
+  # "Talk to Synora" voice assistant (device detail screen): record mic audio
+  # as a ready-to-upload WAV (record), play back the server's spoken reply
+  # (audioplayers), and locate a scratch dir for the recording file
+  # (path_provider -- see the dependency_overrides note below for why its
+  # platform packages stay pinned).
+  # 5.2.1's own pubspec caps record_linux at <1.0.0, whose newest available
+  # version (0.7.2) doesn't fully implement the record_platform_interface
+  # version pub otherwise resolves (missing startStream) -- fails at Dart
+  # kernel-compile time even for an Android-only build, since the whole
+  # package graph has to type-check regardless of target platform. 6.1.1
+  # requires record_linux ^1.2.0 (a version that's actually complete) while
+  # staying on the same platform_interface major version (1.x), so the
+  # app-facing AudioRecorder/RecordConfig/Amplitude API is unchanged.
+  record: ^6.1.1
+  audioplayers: ^6.1.0
+  path_provider: ^2.1.5
+
   # google_sign_in / flutter_facebook_auth are intentionally NOT dependencies
   # right now. The Facebook Android SDK auto-initializes at app startup via a
   # manifest-declared ContentProvider and crashes immediately without a

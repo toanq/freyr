@@ -134,6 +134,26 @@ class ApiClient {
     _throwIfError(res);
   }
 
+  // One turn of the device detail screen's "talk to Synora" assistant:
+  // uploads a recorded utterance (mono 16-bit PCM WAV at 16kHz -- matches
+  // what the server's STT expects) and gets back the transcript, the
+  // assistant's reply text, and (if TTS succeeded) its spoken reply as a WAV,
+  // base64-encoded under "replyAudioWavBase64" (null if synthesis failed --
+  // caller should still show the reply text in that case, just skip audio
+  // playback). STT+LLM(+real MCP tool calls against this device)+TTS all
+  // happen server-side in this one call, so it gets 90 s of headroom rather
+  // than the plain-JSON _timeout (multi-tool-call turns can exceed 30 s).
+  Future<Map<String, dynamic>> assistantTurn(String deviceId, File wavFile) async {
+    final token = await _token();
+    final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/devices/$deviceId/assistant/turn'))
+      ..headers.addAll({if (token != null) 'Authorization': 'Bearer $token'})
+      ..files.add(await http.MultipartFile.fromPath('file', wavFile.path, contentType: MediaType('audio', 'wav')));
+    final streamedRes = await request.send().timeout(const Duration(seconds: 90));
+    final res = await http.Response.fromStream(streamedRes);
+    _throwIfError(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   Future<void> pingDevice(String deviceId) async {
     final res = await http
         .post(
@@ -142,6 +162,26 @@ class ApiClient {
         )
         .timeout(_timeout);
     _throwIfError(res);
+  }
+
+  // Admin-only: triggers synora/devices/{id}/commands/ota against the given
+  // build's version/binary URL. Device compares the version itself and skips
+  // if already current.
+  Future<void> triggerOta(String deviceId, String firmwareBuildId) async {
+    final res = await http
+        .post(
+          Uri.parse('$baseUrl/devices/$deviceId/ota'),
+          headers: await _authHeaders(),
+          body: jsonEncode({'firmwareBuildId': firmwareBuildId}),
+        )
+        .timeout(_timeout);
+    _throwIfError(res);
+  }
+
+  Future<List<Map<String, dynamic>>> listFirmwareBuilds() async {
+    final res = await http.get(Uri.parse('$baseUrl/admin/firmware'), headers: await _authHeaders()).timeout(_timeout);
+    _throwIfError(res);
+    return List<Map<String, dynamic>>.from(jsonDecode(res.body) as List);
   }
 
   Future<void> setDeviceMuted(String deviceId, bool muted) async {

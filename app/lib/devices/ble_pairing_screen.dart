@@ -29,6 +29,7 @@ class SynoraBleUuids {
   static final activation = Guid('b2af9052-c495-4064-a949-a4ff16f17572');
   static final control = Guid('0d128bcf-fd9d-4288-97fb-b11b430e45aa');
   static final status = Guid('483d3f05-a014-4990-a511-fc9863763cca');
+  static final firmware = Guid('917c4e8b-025d-3a9f-1e4c-776a2d1b8e4f');
 }
 
 enum _Step { permissions, scanning, connecting, alreadyPaired, wifiForm, joining, activating, done, error }

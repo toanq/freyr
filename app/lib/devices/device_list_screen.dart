@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/user_profile_screen.dart';
 import '../main.dart';
+import 'ble_firmware_update_screen.dart';
 import 'ble_pairing_screen.dart';
 import 'device_detail_screen.dart';
 
@@ -92,6 +93,19 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> with RouteA
               Navigator.of(context).push(MaterialPageRoute(builder: (_) => BlePairingScreen(onPaired: _reload)));
             },
           ),
+          // Fallback update path for a device with no Wi-Fi (or not yet
+          // provisioned) -- pushes a server-side build over BLE instead of
+          // the normal Wi-Fi OTA triggered from DeviceDetailScreen. Same
+          // admin gate as that screen's firmware button (GET /admin/firmware
+          // is admin-only).
+          if (_isAdmin)
+            IconButton(
+              icon: const Icon(Icons.bluetooth_searching),
+              tooltip: 'Cập nhật firmware qua Bluetooth',
+              onPressed: () {
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BleFirmwareUpdateScreen()));
+              },
+            ),
           IconButton(
             tooltip: 'Tài khoản',
             icon: CircleAvatar(

@@ -7,6 +7,9 @@
     <!-- Device avatar photo capture (image_picker). -->
     <uses-permission android:name="android.permission.CAMERA"/>
 
+    <!-- "Talk to Synora" voice assistant (record). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
     <!-- BLE pairing (flutter_blue_plus) -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>

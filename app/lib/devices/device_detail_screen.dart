@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../main.dart';
+import 'assistant_talk_sheet.dart';
 
 // Per-device dashboard styled after the reference mockup (dark green theme,
 // hero plant graphic, metric tile grid, AI care suggestion). Deliberately
@@ -32,6 +33,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   bool _wateringNow = false;
   bool _pinging = false;
   bool _togglingMuted = false;
+  bool _isAdmin = false;
   List<Map<String, dynamic>> _schedules = [];
 
   String get _name => _device['name'] as String? ?? 'Cây của bạn';
@@ -42,11 +44,17 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   int? get _lowWaterCritical => _device['lowWaterCriticalThresholdPercent'] as int?;
   int? get _lowWaterIntervalMinutes => _device['lowWaterAlertIntervalMinutes'] as int?;
   bool get _muted => _device['muted'] as bool? ?? false;
+  String? get _firmwareVersion => _device['firmwareVersion'] as String?;
 
   @override
   void initState() {
     super.initState();
     _reload();
+    // Only admins can list firmware builds (GET /admin/firmware) -- gates the
+    // firmware-update button so regular owners don't hit a dead-end action.
+    ref.read(apiClientProvider).currentUserRole().then((role) {
+      if (mounted) setState(() => _isAdmin = role == 'Admin' || role == 'SuperAdmin');
+    }).catchError((_) {});
   }
 
   Future<void> _reload() async {
@@ -122,6 +130,15 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
     } finally {
       if (mounted) setState(() => _togglingMuted = false);
     }
+  }
+
+  Future<void> _openAssistantTalk() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AssistantTalkSheet(deviceId: _deviceId),
+    );
   }
 
   // Common watering times -- shown as quick picks so adding a schedule
@@ -583,6 +600,62 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
     }
   }
 
+  Future<void> _updateFirmware() async {
+    List<Map<String, dynamic>> builds;
+    try {
+      builds = await ref.read(apiClientProvider).listFirmwareBuilds();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải danh sách firmware: $e')));
+      }
+      return;
+    }
+    if (builds.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Chưa có bản firmware nào')));
+      }
+      return;
+    }
+    // adminGroup.MapGet("/firmware") returns newest first -- see Program.cs.
+    final latest = builds.first;
+    final latestVersion = latest['version'] as String;
+
+    if (!mounted) return;
+    if (latestVersion == _firmwareVersion) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Thiết bị đã là phiên bản mới nhất ($latestVersion)')),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cập nhật firmware'),
+        content: Text(
+          'Phiên bản hiện tại: ${_firmwareVersion ?? "chưa rõ"}\n'
+          'Phiên bản mới: $latestVersion\n\n'
+          'Thiết bị sẽ tải và cài firmware mới qua Wi-Fi, sau đó khởi động lại.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Hủy')),
+          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Cập nhật')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await ref.read(apiClientProvider).triggerOta(_deviceId, latest['id'] as String);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã gửi lệnh cập nhật firmware')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật firmware: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final device = _device;
@@ -620,6 +693,8 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
           ],
         ),
         actions: [
+          if (_isAdmin)
+            IconButton(icon: const Icon(Icons.system_update), tooltip: 'Cập nhật firmware', onPressed: _updateFirmware),
           IconButton(icon: const Icon(Icons.delete_outline), tooltip: 'Xóa thiết bị', onPressed: _deleteDevice),
         ],
       ),
@@ -722,6 +797,20 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
                     label: Text(_muted ? 'Đang tắt tiếng' : 'Tắt tiếng'),
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: DeviceDetailScreen.goodColor,
+                  foregroundColor: DeviceDetailScreen.backgroundColor,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onPressed: _openAssistantTalk,
+                icon: const Icon(Icons.mic),
+                label: const Text('Trò chuyện với Synora'),
               ),
             ),
             const SizedBox(height: 8),
