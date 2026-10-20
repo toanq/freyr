@@ -6,6 +6,7 @@ export type Lang = 'vi' | 'en'
 export const strings = {
   // Login
   'login.subtitle': { vi: 'Đăng nhập để chăm sóc cây của bạn', en: 'Sign in to manage your plants' },
+  'login.home': { vi: '← Về trang chủ', en: '← Back to homepage' },
   'login.username': { vi: 'Tên đăng nhập', en: 'Username' },
   'login.password': { vi: 'Mật khẩu', en: 'Password' },
   'login.submit': { vi: 'Đăng nhập', en: 'Sign in' },

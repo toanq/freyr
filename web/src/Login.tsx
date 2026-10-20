@@ -48,6 +48,9 @@ function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   return (
     <main className="login">
       <div className="login-lang">
+        <a className="login-home" href="/">
+          {t('login.home')}
+        </a>
         <LanguageToggle />
       </div>
       <img className="login-logo" src={`${import.meta.env.BASE_URL}logo-green.jpg`} alt="" />

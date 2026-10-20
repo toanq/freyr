@@ -35,6 +35,10 @@ export default function Header({ onOrder }) {
           )}
         </nav>
         <div className="header__actions">
+          {/* Plain <a>, not <Link>: /login leaves this SPA for the web console (/app/). */}
+          <a href="/login" className="btn btn--ghost">
+            Đăng nhập
+          </a>
           <button type="button" className="btn btn--primary" onClick={onOrder}>
             Đặt Hàng
           </button>

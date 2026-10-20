@@ -205,8 +205,19 @@ audio {
 
 .login-lang {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 1rem;
+}
+
+.login-home {
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.login-home:hover {
+  color: var(--good);
 }
 
 @media (max-width: 420px) {
