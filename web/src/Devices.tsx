@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiFetch } from './api'
+import { useI18n } from './i18n'
 
 type Reading = {
   temperatureCelsius: number | null
@@ -34,6 +35,7 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
   const [devices, setDevices] = useState<DeviceRow[]>([])
   const [activationCode, setActivationCode] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
 
   const [testingDeviceId, setTestingDeviceId] = useState<string | null>(null)
@@ -48,12 +50,14 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
   const [discussionsDeviceId, setDiscussionsDeviceId] = useState<string | null>(null)
   const [discussions, setDiscussions] = useState<Discussion[]>([])
   const [discussionsError, setDiscussionsError] = useState<string | null>(null)
+  const { t, formatDate } = useI18n()
 
   const load = () => {
     apiFetch('/devices')
       .then((res) => res.json())
       .then(setDevices)
-      .catch(() => setError('Could not load devices.'))
+      .then(() => setLoadFailed(false))
+      .catch(() => setLoadFailed(true))
   }
 
   useEffect(load, [])
@@ -71,10 +75,10 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
     if (!res.ok) {
       setError(
         res.status === 409
-          ? 'Device already paired.'
+          ? t('devices.alreadyPaired')
           : res.status === 404
-            ? 'Unknown activation code.'
-            : `Could not pair device (HTTP ${res.status}).`,
+            ? t('devices.unknownCode')
+            : t('devices.pairFailed', { status: res.status }),
       )
       return
     }
@@ -90,7 +94,7 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
       body: JSON.stringify({ name }),
     })
     if (!res.ok) {
-      setError(`Could not rename device (HTTP ${res.status}).`)
+      setError(t('devices.renameFailed', { status: res.status }))
       return
     }
     load()
@@ -99,10 +103,10 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
   const handleDelete = async (id: string) => {
     setError(null)
     setStatusMessage(null)
-    const name = devices.find((d) => d.id === id)?.name ?? 'Device'
+    const name = devices.find((d) => d.id === id)?.name ?? t('devices.defaultName')
     const res = await apiFetch(`/devices/${id}`, { method: 'DELETE' })
     if (!res.ok) {
-      setError(`Could not remove device (HTTP ${res.status}).`)
+      setError(t('devices.removeFailed', { status: res.status }))
       return
     }
     // The server only unpairs (clears owner/schedules) rather than deleting
@@ -114,9 +118,7 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
     // just with its owner cleared. Without this message that reads as the
     // remove having silently failed.
     setStatusMessage(
-      isAdmin
-        ? `${name} unpaired. It stays listed under "All devices" (owner cleared) so it can be re-paired.`
-        : `${name} removed from your devices.`,
+      isAdmin ? t('devices.unpaired', { name }) : t('devices.removed', { name }),
     )
     load()
   }
@@ -128,7 +130,7 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
       body: JSON.stringify({ muted }),
     })
     if (!res.ok) {
-      setError(`Could not update muted state (HTTP ${res.status}).`)
+      setError(t('devices.muteFailed', { status: res.status }))
       return
     }
     load()
@@ -149,7 +151,7 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
         return res.json()
       })
       .then(setDiscussions)
-      .catch(() => setDiscussionsError('Could not load conversation history.'))
+      .catch(() => setDiscussionsError(t('discussions.loadFailed')))
   }
 
   const openTestForm = (id: string) => {
@@ -160,7 +162,7 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
 
   const handleSendTestReading = async (e: React.FormEvent, id: string) => {
     e.preventDefault()
-    setTestStatus('Sending…')
+    setTestStatus(t('devices.sending'))
 
     const toNumberOrNull = (v: string) => (v.trim() === '' ? null : Number(v))
     const res = await apiFetch(`/devices/${id}/test-reading`, {
@@ -175,31 +177,38 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
     })
 
     if (res.ok) {
-      setTestStatus('Sent -- reloading…')
+      setTestStatus(t('devices.sentReloading'))
       load()
     } else {
-      setTestStatus(`Failed (HTTP ${res.status}).`)
+      setTestStatus(t('devices.failed', { status: res.status }))
     }
   }
 
   return (
     <section className="devices">
       <div className="page-header">
-        <h2>{isAdmin ? 'All devices' : 'My devices'}</h2>
+        <h2>{isAdmin ? t('devices.all') : t('devices.mine')}</h2>
         <span className="page-count">{devices.length}</span>
       </div>
-      <form className="inline-form card" onSubmit={handlePair}>
-        <input
-          placeholder="Activation code"
-          value={activationCode}
-          onChange={(e) => setActivationCode(e.target.value)}
-          required
-        />
-        <button type="submit">Pair device</button>
-      </form>
+      {isAdmin && (
+        <form className="inline-form card" onSubmit={handlePair}>
+          <input
+            placeholder={t('devices.activationCode')}
+            value={activationCode}
+            onChange={(e) => setActivationCode(e.target.value)}
+            required
+          />
+          <button type="submit">{t('devices.pair')}</button>
+        </form>
+      )}
+      {loadFailed && <p className="form-error">{t('devices.loadFailed')}</p>}
       {error && <p className="form-error">{error}</p>}
       {statusMessage && <p className="form-status">{statusMessage}</p>}
-      {devices.length === 0 && !error && <p className="empty-state">No paired devices yet.</p>}
+      {devices.length === 0 && !error && !loadFailed && (
+        <p className="empty-state">
+          {isAdmin ? t('devices.emptyAdmin') : t('devices.emptyUser')}
+        </p>
+      )}
       <ul className="device-list">
         {devices.map((d) => (
           <li key={d.id} className="card device-card">
@@ -210,19 +219,19 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
               </span>
               <input
                 className="device-name"
-                aria-label="Device name"
+                aria-label={t('devices.nameLabel')}
                 defaultValue={d.name}
                 onBlur={(e) => e.target.value !== d.name && handleRename(d.id, e.target.value)}
               />
-              {isAdmin && <span className="chip">{d.owner ?? 'unpaired'}</span>}
+              {isAdmin && <span className="chip">{d.owner ?? t('devices.noOwner')}</span>}
             </div>
             <div className="device-meta">
               <span className={d.isOnline ? 'device-status online' : 'device-status'}>
-                {d.isOnline ? 'Online' : 'Offline'}
+                {d.isOnline ? t('devices.online') : t('devices.offline')}
               </span>
-              {d.muted && <span className="device-status muted">Muted</span>}
+              {d.muted && <span className="device-status muted">{t('devices.muted')}</span>}
               <span className="device-mac">{d.macAddress ?? '—'}</span>
-              <span>{d.pairedAt ? `Paired ${new Date(d.pairedAt).toLocaleString()}` : 'Not paired'}</span>
+              <span>{d.pairedAt ? t('devices.pairedAt', { date: formatDate(d.pairedAt) }) : t('devices.notPaired')}</span>
               {d.xiaozhiActivationCode && (
                 <span className="device-mac" title="xiaozhi.me activation code">
                   xiaozhi: {d.xiaozhiActivationCode}
@@ -232,14 +241,14 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
             <Telemetry reading={d.latestReading} />
             <div className="device-actions">
               <button type="button" onClick={() => toggleDiscussions(d.id)}>
-                {discussionsDeviceId === d.id ? 'Hide conversations' : 'Conversations'}
+                {discussionsDeviceId === d.id ? t('devices.hideConversations') : t('devices.conversations')}
               </button>
               <button type="button" onClick={() => handleToggleMuted(d.id, !d.muted)}>
-                {d.muted ? 'Unmute' : 'Mute'}
+                {d.muted ? t('devices.unmute') : t('devices.mute')}
               </button>
               {isAdmin && (
                 <button type="button" onClick={() => openTestForm(d.id)}>
-                  Test reading
+                  {t('devices.testReading')}
                 </button>
               )}
               <button
@@ -247,12 +256,10 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
                 className="btn-danger"
                 onClick={() => handleDelete(d.id)}
                 title={
-                  isAdmin
-                    ? 'Unpairs the device and clears its owner -- it stays in this list, ready to be re-paired.'
-                    : 'Removes this device from your account.'
+                  isAdmin ? t('devices.unpairHint') : t('devices.removeHint')
                 }
               >
-                {isAdmin ? 'Unpair' : 'Remove'}
+                {isAdmin ? t('devices.unpair') : t('devices.remove')}
               </button>
             </div>
             {isAdmin && testingDeviceId === d.id && (
@@ -281,9 +288,9 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
                   value={testReading.waterLevelPercent}
                   onChange={(e) => setTestReading({ ...testReading, waterLevelPercent: e.target.value })}
                 />
-                <button type="submit">Send</button>
+                <button type="submit">{t('devices.send')}</button>
                 <button type="button" onClick={() => setTestingDeviceId(null)}>
-                  Cancel
+                  {t('devices.cancel')}
                 </button>
                 {testStatus && <span className="form-hint">{testStatus}</span>}
               </form>
@@ -307,12 +314,13 @@ export function Discussions({
   discussions: Discussion[]
   error: string | null
 }) {
+  const { t, formatDate } = useI18n()
   if (error) {
     return <p className="form-error">{error}</p>
   }
 
   if (discussions.length === 0) {
-    return <p className="discussions discussions--empty">No conversations yet.</p>
+    return <p className="discussions discussions--empty">{t('discussions.empty')}</p>
   }
 
   return (
@@ -324,7 +332,7 @@ export function Discussions({
             {m.hasUserAudio && <RecordingPlayer deviceId={deviceId} messageId={m.id} />}
           </p>
           <p className="discussion-assistant">{m.assistantText}</p>
-          <span className="discussion-timestamp">{new Date(m.createdAt).toLocaleString()}</span>
+          <span className="discussion-timestamp">{formatDate(m.createdAt)}</span>
         </li>
       ))}
     </ul>
@@ -341,6 +349,7 @@ function RecordingPlayer({ deviceId, messageId }: { deviceId: string; messageId:
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [playerError, setPlayerError] = useState<string | null>(null)
+  const { t } = useI18n()
 
   useEffect(() => {
     return () => {
@@ -357,7 +366,7 @@ function RecordingPlayer({ deviceId, messageId }: { deviceId: string; messageId:
       const blob = await res.blob()
       setAudioUrl(URL.createObjectURL(blob))
     } catch {
-      setPlayerError('Could not load recording.')
+      setPlayerError(t('discussions.playFailed'))
     } finally {
       setLoading(false)
     }
@@ -370,7 +379,7 @@ function RecordingPlayer({ deviceId, messageId }: { deviceId: string; messageId:
   return (
     <span className="discussion-recording-controls">
       <button type="button" className="discussion-recording-play" onClick={handleLoad} disabled={loading}>
-        {loading ? 'Loading…' : '▶ Play recording'}
+        {loading ? t('discussions.loading') : t('discussions.play')}
       </button>
       {playerError && <span className="form-error">{playerError}</span>}
     </span>
@@ -378,31 +387,32 @@ function RecordingPlayer({ deviceId, messageId }: { deviceId: string; messageId:
 }
 
 function Telemetry({ reading }: { reading: Reading | null }) {
+  const { t, formatDate } = useI18n()
   if (!reading) {
-    return <p className="telemetry telemetry--empty">No sensor data yet.</p>
+    return <p className="telemetry telemetry--empty">{t('telemetry.empty')}</p>
   }
 
   return (
     <>
       <dl className="telemetry">
         <div className="telemetry-tile telemetry-tile--temp">
-          <dt>Temperature</dt>
+          <dt>{t('telemetry.temperature')}</dt>
           <dd>{reading.temperatureCelsius != null ? `${reading.temperatureCelsius.toFixed(1)}°C` : '—'}</dd>
         </div>
         <div className="telemetry-tile telemetry-tile--humidity">
-          <dt>Humidity</dt>
+          <dt>{t('telemetry.humidity')}</dt>
           <dd>{reading.humidityPercent != null ? `${reading.humidityPercent.toFixed(0)}%` : '—'}</dd>
         </div>
         <div className="telemetry-tile telemetry-tile--soil">
-          <dt>Soil moisture</dt>
+          <dt>{t('telemetry.soil')}</dt>
           <dd>{reading.soilMoisturePercent != null ? `${reading.soilMoisturePercent.toFixed(0)}%` : '—'}</dd>
         </div>
         <div className="telemetry-tile telemetry-tile--water">
-          <dt>Water level</dt>
+          <dt>{t('telemetry.water')}</dt>
           <dd>{reading.waterLevelPercent != null ? `${reading.waterLevelPercent.toFixed(0)}%` : '—'}</dd>
         </div>
       </dl>
-      <p className="telemetry-timestamp">Updated {new Date(reading.recordedAt).toLocaleString()}</p>
+      <p className="telemetry-timestamp">{t('telemetry.updated', { date: formatDate(reading.recordedAt) })}</p>
     </>
   )
 }

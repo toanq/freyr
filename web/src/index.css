@@ -177,3 +177,40 @@ input[type='file']::file-selector-button {
 audio {
   color-scheme: dark;
 }
+
+/* VI/EN language switch (i18n.tsx) */
+.lang-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--chip);
+  flex: none;
+}
+
+.lang-option {
+  min-height: 28px;
+  padding: 0 0.6rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.lang-option--active,
+.lang-option--active:hover:not(:disabled) {
+  background: var(--good);
+  color: #0e2418;
+}
+
+.login-lang {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 420px) {
+  .app-bar-username {
+    display: none;
+  }
+}

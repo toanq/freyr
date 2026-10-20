@@ -8,6 +8,8 @@ import SystemConfig from './SystemConfig'
 import DuplicateDevices from './DuplicateDevices'
 import MicTestUploads from './MicTestUploads'
 import Firmware from './Firmware'
+import { useI18n, type StringKey } from './i18n'
+import { LanguageToggle } from './I18nProvider'
 
 type Session = { username: string; role: string }
 type View =
@@ -22,6 +24,7 @@ type View =
 
 function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => void }) {
   const [view, setView] = useState<View>('devices')
+  const { t } = useI18n()
 
   const handleLogout = async () => {
     await apiFetch('/auth/logout', { method: 'POST' })
@@ -31,17 +34,17 @@ function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => 
   const isAdmin = session.role === 'Admin' || session.role === 'SuperAdmin'
   const isSuperAdmin = session.role === 'SuperAdmin'
 
-  const tabs: { id: View; label: string; visible: boolean }[] = [
-    { id: 'devices', label: 'Devices', visible: true },
-    { id: 'firmware', label: 'Firmware', visible: isAdmin },
-    { id: 'dashboard', label: 'Status', visible: isAdmin },
-    { id: 'users', label: 'Users', visible: isSuperAdmin },
-    { id: 'admin-test', label: 'Admin test', visible: isAdmin },
-    { id: 'duplicate-devices', label: 'Duplicates', visible: isAdmin },
-    { id: 'mictest-uploads', label: 'Mic tests', visible: isAdmin },
-    { id: 'system-config', label: 'System config', visible: isSuperAdmin },
+  const tabs: { id: View; label: StringKey; visible: boolean }[] = [
+    { id: 'devices', label: 'tab.devices', visible: true },
+    { id: 'firmware', label: 'tab.firmware', visible: isAdmin },
+    { id: 'dashboard', label: 'tab.status', visible: isAdmin },
+    { id: 'users', label: 'tab.users', visible: isSuperAdmin },
+    { id: 'admin-test', label: 'tab.adminTest', visible: isAdmin },
+    { id: 'duplicate-devices', label: 'tab.duplicates', visible: isAdmin },
+    { id: 'mictest-uploads', label: 'tab.micTests', visible: isAdmin },
+    { id: 'system-config', label: 'tab.systemConfig', visible: isSuperAdmin },
   ]
-  const visibleTabs = tabs.filter((t) => t.visible)
+  const visibleTabs = tabs.filter((tab) => tab.visible)
 
   return (
     <div className="shell">
@@ -54,21 +57,22 @@ function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => 
           </span>
           <span className="app-bar-username">{session.username}</span>
         </span>
+        <LanguageToggle />
         <button type="button" className="app-bar-signout" onClick={handleLogout}>
-          Sign out
+          {t('shell.signOut')}
         </button>
       </header>
       {visibleTabs.length > 1 && (
         <nav className="tabs" aria-label="Sections">
-          {visibleTabs.map((t) => (
+          {visibleTabs.map((tab) => (
             <button
-              key={t.id}
+              key={tab.id}
               type="button"
-              className={view === t.id ? 'tab tab--active' : 'tab'}
-              aria-current={view === t.id ? 'page' : undefined}
-              onClick={() => setView(t.id)}
+              className={view === tab.id ? 'tab tab--active' : 'tab'}
+              aria-current={view === tab.id ? 'page' : undefined}
+              onClick={() => setView(tab.id)}
             >
-              {t.label}
+              {t(tab.label)}
             </button>
           ))}
         </nav>
