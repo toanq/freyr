@@ -5,6 +5,9 @@
 #include <string>
 
 #include <esp_err.h>
+#include <esp_ota_ops.h>
+
+#include "sha256.h"
 
 struct ble_gatt_access_ctxt;
 struct ble_gatt_register_ctxt;
@@ -69,6 +72,12 @@ private:
     static int ControlAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
     static int StatusAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
 
+    // Write-only. Raw firmware bytes (not UTF-8-safe), so this does NOT use
+    // ReadOmToString like every other write characteristic -- see its .cc
+    // definition. Only meaningful between an "ota_start" and the matching
+    // "ota_commit"/failure on `control` below.
+    static int FirmwareAccessCb(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+
     // `control` characteristic commands.
     void HandleCommit();
     void HandleReboot();
@@ -78,6 +87,25 @@ private:
     void HandleMoreAps();
     void HandleReactivate();
     void HandleReconnect();
+
+    // BLE firmware push (fallback OTA path for an unprovisioned/no-WiFi
+    // device -- see ota_updater.h for the WiFi/MQTT-triggered path instead).
+    // `control: "ota_start:<size>:<sha256-hex>"` and `control: "ota_commit"`;
+    // the actual bytes go to FirmwareAccessCb above. Scoped to the
+    // provisioning window only -- Deinit() already tears this whole service
+    // down once paired, no extra gating needed.
+    void HandleOtaStart(size_t size, const std::string& sha256_hex);
+    void HandleOtaCommit();
+
+    // Drops any in-flight BLE OTA (esp_ota_abort() if `abort` and a handle
+    // is open) and releases OtaUpdater's partition claim. No-op while the
+    // commit task owns the state (ota_committing_) -- see HandleOtaCommit.
+    void ResetOtaState(bool abort);
+    // Unconditional version of the above, for the commit task itself.
+    void ClearOtaState(bool abort);
+    // Runs on a ScheduleOnTask task: esp_ota_end()'s full image verify and
+    // esp_ota_set_boot_partition() are too slow/stack-heavy for NimBLE's host task.
+    void FinishOtaCommit();
 
     // Runs off the BLE callback's task context (scheduled from HandleCommit):
     // connects to the newly-committed Wi-Fi, then activates against the
@@ -173,4 +201,30 @@ private:
     // Android's own multi-part read handling can invoke the read callback
     // twice per logical app-level read).
     std::string cached_scan_chunk_ = R"({"more":false,"items":[]})";
+
+    // BLE firmware-push state (see HandleOtaStart/FirmwareAccessCb/
+    // HandleOtaCommit). ota_partition_ is the slot ota_start targeted --
+    // kept around until ota_commit so esp_ota_set_boot_partition() doesn't
+    // have to re-derive it (and risk picking a different slot if something
+    // else touched OTA state in between, which nothing currently does, but
+    // re-deriving it would be the kind of implicit coupling this avoids).
+    std::atomic<bool> ota_in_progress_{false};
+    // True while FinishOtaCommit() runs off-task; host-task paths leave every
+    // ota_* member (including ota_error_) alone until it clears.
+    std::atomic<bool> ota_committing_{false};
+    esp_ota_handle_t ota_handle_ = 0;
+    const esp_partition_t* ota_partition_ = nullptr;
+    Sha256Context ota_sha256_ctx_;
+    size_t ota_expected_size_ = 0;
+    std::string ota_expected_sha256_; // lowercase hex, from ota_start
+    size_t ota_bytes_written_ = 0;
+
+    // Surfaced via the `status` characteristic (see StatusAccessCb) ahead of
+    // the existing idle/joining/online/activated/error states, since an OTA
+    // in progress is a more specific and more urgent thing for the app to
+    // show than whatever provisioning state happened to precede it.
+    // ota_progress_percent_ is only meaningful while ota_in_progress_; a
+    // non-empty ota_error_ latches until the next ota_start.
+    std::atomic<int> ota_progress_percent_{0};
+    std::string ota_error_;
 };

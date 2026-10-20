@@ -30,3 +30,9 @@ TileStatus TemperatureTileStatus(bool valid, float celsius);
 // Air humidity (percent) -- both too dry and too humid are outside a
 // comfortable band, so both tails matter (same shape as temperature).
 TileStatus HumidityTileStatus(bool valid, float percent);
+
+// "good"/"warn"/"bad"/"unknown" -- for anything that hands a TileStatus to
+// something other than the dashboard's own tile-coloring (e.g. the
+// self.get_sensor_readings MCP tool's JSON), where a plain string is more
+// useful than the enum itself.
+const char* TileStatusToString(TileStatus status);

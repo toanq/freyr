@@ -54,10 +54,14 @@ ADC2 channels, which conflicts with Wi-Fi).
   voltage confirmed present at the pin. Tie it to GND instead.
 - **RD isn't for touch.** It's the LCD controller's read strobe, unrelated to
   the touch panel's X/Y wires; tie it to 3.3V regardless of touch wiring.
-- **The VL53L1X water-level sensor is on its own I2C bus, not sharing SHT31's.**
-  The `saleca/vl53l1x_uld_esp_wrapper` component creates its own internal I2C
-  bus handle from raw pins and can't be handed a pre-existing shared bus, so
-  it gets I2C_NUM_1 (GPIO2/4) instead of sharing I2C_NUM_0 with SHT31.
+- **The VL53L1X water-level sensor is on its own I2C bus.** The
+  `saleca/vl53l1x_uld_esp_wrapper` component creates its own internal I2C bus
+  handle from raw pins and can't be handed a pre-existing shared bus, so it
+  gets its own I2C_NUM_1 (GPIO2/4) regardless of what else is on the board.
+- **DHT11 (air temp/humidity) is single-wire, not I2C.** Replaced the earlier
+  SHT31 (which was I2C_NUM_0, SDA=GPIO9/SCL=GPIO8) -- DHT11 only needs one
+  data pin (bit-banged, see `dht11_sensor.h`), reusing GPIO9. GPIO8 (former
+  SCL) is free again as a result.
 
 ## Other board pins
 
@@ -65,8 +69,8 @@ ADC2 channels, which conflicts with Wi-Fi).
 |---|---|---|
 | BOOT button / factory reset + voice toggle | GPIO0 | strapping pin, standard BOOT button location; the only physical button on this board -- 10s hold = factory reset, click = toggle voice session |
 | Soil moisture ADC | GPIO1 | ADC1_CH0 |
-| I2C bus 0 (SHT31) | SDA=GPIO9, SCL=GPIO8 | I2C_NUM_0 |
-| I2C bus 1 (VL53L1X water level) | SDA=GPIO2, SCL=GPIO4 | I2C_NUM_1 -- separate bus, not shared with SHT31; see gotchas below |
+| DHT11 (air temp/humidity) | GPIO9 | single-wire, bit-banged -- see `dht11_sensor.h`. Needs its own pull-up (external/inline on most modules) |
+| I2C bus 1 (VL53L1X water level) | SDA=GPIO2, SCL=GPIO4 | I2C_NUM_1 -- its own dedicated bus, see gotchas above |
 | Speaker I2S (MAX98357A) | DOUT=GPIO5, BCLK=GPIO6, LRCK=GPIO7 | |
 | Mic I2S (INMP441) | WS=GPIO41, SCK=GPIO39, DIN=GPIO40 | |
 | Water pump (IRLZ44N gate) | GPIO47 | active-high |
@@ -76,5 +80,5 @@ Reserved, do not use for anything: GPIO3/45/46 (strapping), GPIO19/20
 (native USB D-/D+), GPIO22-25 (don't exist on ESP32-S3), GPIO26-32 (SPI
 flash), GPIO33-37 (octal PSRAM), GPIO43/44 (console UART).
 
-No free GPIOs remain in the low range at this point (GPIO2/4, formerly free,
-now carry the VL53L1X's dedicated I2C bus).
+GPIO8 is free (SHT31's former SCL, no longer needed now that DHT11 only
+uses one data pin).

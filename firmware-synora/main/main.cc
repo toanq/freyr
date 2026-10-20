@@ -1,6 +1,7 @@
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
 #include <nvs_flash.h>
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
@@ -15,6 +16,7 @@
 #include "boards/synora/synora_voice_session.h"
 #include "boards/synora/config.h"
 #include "boards/synora/test_console.h"
+#include "boards/synora/welcome_audio.h"
 
 #define TAG "synora"
 
@@ -32,10 +34,31 @@ static void AudioInputTask(void* arg) {
     AfeAudioEngine* engine = ctx->second;
 
     constexpr int kChunkSamples = 160;  // 10 ms @ 16 kHz
+    std::vector<int16_t> mono;  // scratch buffer, only used when a reference channel is interleaved in
     while (true) {
-        std::vector<int16_t> data(kChunkSamples * codec->input_channels());
+        // "mictest" (test_console.cc) needs sole access to the RX channel --
+        // esp-idf's I2S driver doesn't tolerate two concurrent readers on one
+        // channel (confirmed live: spurious "channel is not enabled" errors).
+        if (IsMicTestRecording()) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        const int channels = codec->input_channels();
+        std::vector<int16_t> data(kChunkSamples * channels);
         if (codec->InputData(data)) {
-            SynoraVoiceSession::GetInstance().FeedMic(data);
+            // engine->Feed() wants the full interleaved buffer (AFE's AEC
+            // needs the "R" reference channel), but the voice session's Opus
+            // encoder is mono-only -- strip channel 0 (the real mic) out for
+            // it when a reference channel is present.
+            if (channels > 1) {
+                mono.resize(data.size() / channels);
+                for (size_t i = 0, j = 0; i < data.size(); i += channels, ++j) {
+                    mono[j] = data[i];
+                }
+                SynoraVoiceSession::GetInstance().FeedMic(mono);
+            } else {
+                SynoraVoiceSession::GetInstance().FeedMic(data);
+            }
             engine->Feed(std::move(data));
         } else {
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -56,19 +79,42 @@ extern "C" void app_main(void) {
 
     // BOOT-button factory reset (hold FACTORY_RESET_HOLD_MS) is live from here on.
     static SynoraBoard board;
-    InitializeTestConsole(&board);
 
     // Simplex I2S: separate mic + amp buses, no I2C codec.
     static NoAudioCodecSimplex codec(
         AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
         AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT,
         AUDIO_I2S_MIC_GPIO_SCK, AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN);
+    // No hardware loopback exists on this board to give esp-sr's AFE an AEC
+    // reference (mic and speaker are on separate I2S buses), so synthesize
+    // one in software: every sample written to the speaker gets queued and
+    // interleaved back out of Read() as a second channel. Must happen before
+    // AfeAudioEngine::Initialize() below, which reads input_channels()/
+    // input_reference() to size and configure the AFE instance.
+    codec.EnableSoftwareAecReference(true);
     // Drive the codec through the public AudioCodec interface: NoAudioCodec
     // declares EnableInput/EnableOutput as protected overrides on purpose.
     AudioCodec& codec_if = codec;
     codec_if.Start();
+    codec_if.SetOutputVolume(100); // max, for the speaker hardware debugging below
     codec_if.EnableInput(true);
     codec_if.EnableOutput(true); // voice-session playback (audio/down) needs output live.
+    board.SetAudioCodec(&codec_if); // lets TriggerFindMe() (self.find_device) play its ping chime
+
+    // Moved here (was right after `board`) so the "mictest" command has a
+    // ready codec the moment the console comes up.
+    InitializeTestConsole(&board, &codec);
+
+    // Speaker-hardware diagnostic (see scripts/gen_welcome_audio.py): plays a
+    // known-good TTS clip straight to the speaker, bypassing the whole
+    // MQTT/STT/LLM/TTS round trip entirely -- isolates whether static/no-audio
+    // symptoms are a wiring problem or a software one. Remove once the
+    // speaker's confirmed working.
+    {
+        std::vector<int16_t> welcome(kWelcomeAudioPcm, kWelcomeAudioPcm + kWelcomeAudioSampleCount);
+        ESP_LOGI(TAG, "Playing boot welcome chime (%u samples)", (unsigned)welcome.size());
+        codec_if.OutputData(welcome);
+    }
 
     SynoraVoiceSession::GetInstance().Init(&codec);
 
@@ -88,8 +134,19 @@ extern "C" void app_main(void) {
                       "check the CONFIG_SR_WN_* selection");
         return;
     }
-    engine.EnableWakeWordDetection(true);
-    ESP_LOGI(TAG, "Wake-word detection enabled; say the wake word.");
+
+    // Confirms this boot as good (board/audio/AFE all initialized without
+    // crashing) and cancels CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE's pending-
+    // verify rollback for a fresh OTA image. Deliberately not gated on
+    // WiFi/MQTT coming up -- an unprovisioned device may never get WiFi, and
+    // would otherwise stay "pending verify" forever, reboot-rolling-back on
+    // the next unrelated crash/reset even though the image itself is fine.
+    esp_ota_mark_app_valid_cancel_rollback();
+
+    // Disabled for now during mic/speaker hardware debugging -- re-enable
+    // (engine.EnableWakeWordDetection(true)) once that's settled.
+    engine.EnableWakeWordDetection(false);
+    ESP_LOGI(TAG, "Wake-word detection disabled (debugging)");
 
     static auto ctx = std::make_pair(&codec, &engine);
     // 4096 overflowed within seconds of the first "Listening" (confirmed

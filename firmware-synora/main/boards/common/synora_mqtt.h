@@ -6,6 +6,8 @@
 #include <map>
 #include <string>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <mqtt_client.h>
 
 // Thin wrapper around esp-mqtt for the device<->server link (telemetry,
@@ -24,8 +26,23 @@ public:
     // succeeds (first-time pairing).
     void EnsureStarted();
 
-    // Publishes to synora/devices/{deviceId}/{topic_suffix}.
-    void Publish(const std::string& topic_suffix, const std::string& payload, int qos = 1, bool retain = false);
+    // Publishes to synora/devices/{deviceId}/{topic_suffix}. Fire-and-forget
+    // -- returns esp_mqtt_client_publish()'s message id (or -1 if not
+    // connected/queue full), but nothing here confirms the broker actually
+    // received it. Fine for most callers (telemetry/commands, where a missed
+    // one is harmless and the next one supersedes it), but see
+    // PublishAndWaitForAck() below for anything that needs to actually know.
+    int Publish(const std::string& topic_suffix, const std::string& payload, int qos = 1, bool retain = false);
+
+    // Like Publish(), but blocks (up to timeout_ms) for the broker's PUBACK
+    // (QoS 1) before returning -- true only if it actually arrived in time.
+    // qos must be 1 (or 2); QoS 0 has no ack to wait for. Confirmed live this
+    // matters: a large one-shot payload (mictest's WAV upload) published fine
+    // by Publish()'s own accounting (a valid msg_id came back) yet never
+    // reached the server at all, because the public WSS tunnel path
+    // disconnects/reconnects every 20-100s and the publish landed in a dead
+    // window -- Publish() has no way to detect that, only this does.
+    bool PublishAndWaitForAck(const std::string& topic_suffix, const std::string& payload, int qos, int timeout_ms);
 
     // Subscribes to synora/devices/{deviceId}/{topic_suffix}; callback fires
     // (on the MQTT client's own task) with the raw payload on every message.
@@ -82,6 +99,14 @@ private:
     std::atomic<bool> is_muted_ = false;
     bool started_ = false;
     std::string device_id_;
+
+    // PublishAndWaitForAck()'s wait/signal pair -- created once in
+    // EnsureStarted(). Single-slot (one pending ack at a time) is
+    // deliberate: today's only caller (mictest's upload) is one-shot and
+    // sequential, not worth a full msg_id-keyed map for.
+    SemaphoreHandle_t publish_ack_semaphore_ = nullptr;
+    std::atomic<int> pending_publish_msg_id_{-1};
+    std::atomic<int> last_acked_msg_id_{-1};
 
     // Keyed by full topic string -- looked up on MQTT_EVENT_DATA.
     std::map<std::string, std::function<void(const std::string&)>> subscriptions_;

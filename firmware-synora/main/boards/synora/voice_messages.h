@@ -22,3 +22,8 @@ bool IsTtsStopMessage(const std::string& payload);
 // the signal SynoraVoiceSession uses to forward the inner JSON-RPC payload
 // to McpServer::ParseMessage.
 bool IsMcpMessage(const std::string& payload);
+
+// If payload is a {"type":"tts","state":"sentence_start","text":"..."}
+// control message, fills out_text with its "text" field and returns true --
+// SynoraVoiceSession shows this under the eyes as a subtitle for the reply.
+bool TryGetTtsSentenceText(const std::string& payload, std::string& out_text);

@@ -1,6 +1,7 @@
 #include "no_audio_codec.h"
 
 #include <esp_log.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -215,6 +216,22 @@ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sampl
     ESP_LOGI(TAG, "Simplex channels created");
 }
 
+namespace {
+inline int16_t ClipToInt16(int32_t value) {
+    return (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : static_cast<int16_t>(value);
+}
+}  // namespace
+
+void NoAudioCodec::EnableSoftwareAecReference(bool enable) {
+    std::lock_guard<std::mutex> lock(reference_mutex_);
+    reference_enabled_ = enable;
+    reference_queue_.clear();
+    // "MR": mono mic + synthesized reference, matching the input_format
+    // AfeAudioEngine builds from input_channels()/input_reference().
+    input_reference_ = enable;
+    input_channels_ = enable ? 2 : 1;
+}
+
 int NoAudioCodec::Write(const int16_t* data, int samples) {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
     std::vector<int32_t> buffer(samples);
@@ -233,6 +250,22 @@ int NoAudioCodec::Write(const int16_t* data, int samples) {
         }
     }
 
+    {
+        std::lock_guard<std::mutex> ref_lock(reference_mutex_);
+        if (reference_enabled_) {
+            if (reference_queue_.size() + static_cast<size_t>(samples) > kMaxReferenceQueueSamples) {
+                size_t overflow = reference_queue_.size() + samples - kMaxReferenceQueueSamples;
+                reference_queue_.erase(reference_queue_.begin(),
+                    reference_queue_.begin() + std::min(overflow, reference_queue_.size()));
+            }
+            // Reference is the pre-volume-scaling samples (same waveform
+            // shape the speaker emits, just not final-gain-scaled) -- AEC's
+            // correlation only needs the shape, and this keeps Write() from
+            // having to touch the int32 DMA buffer again after the fact.
+            reference_queue_.insert(reference_queue_.end(), data, data + samples);
+        }
+    }
+
     size_t bytes_written;
     ESP_ERROR_CHECK(i2s_channel_write(tx_handle_, buffer.data(), samples * sizeof(int32_t), &bytes_written, portMAX_DELAY));
     return bytes_written / sizeof(int32_t);
@@ -242,23 +275,54 @@ int NoAudioCodec::Read(int16_t* dest, int samples) {
     size_t bytes_read;
     constexpr uint32_t kReadTimeoutMs = 200;
 
-    std::vector<int32_t> bit32_buffer(samples);
-    if (i2s_channel_read(rx_handle_, bit32_buffer.data(), samples * sizeof(int32_t), &bytes_read, kReadTimeoutMs) != ESP_OK) {
+    bool want_reference;
+    {
+        std::lock_guard<std::mutex> ref_lock(reference_mutex_);
+        want_reference = reference_enabled_;
+    }
+    // samples is the caller's total interleaved buffer size (see
+    // AudioCodec::InputData -> data.size(), sized by input_channels()), so
+    // when a reference channel is active only half of it is real mic frames.
+    int mic_samples = want_reference ? samples / 2 : samples;
+
+    std::vector<int32_t> bit32_buffer(mic_samples);
+    if (i2s_channel_read(rx_handle_, bit32_buffer.data(), mic_samples * sizeof(int32_t), &bytes_read, kReadTimeoutMs) != ESP_OK) {
         return 0;
     }
 
-    samples = bytes_read / sizeof(int32_t);
-    for (int i = 0; i < samples; i++) {
-        // >>12 (stock) left the mic sounding insensitive/under-recognized on
-        // Synora's INMP441 -- >>10 is a conservative software gain bump
-        // (~4x/+12dB) to test before assuming the root cause is hardware
-        // (wiring/EMI). Push further only with care: too little shift clips
-        // hard on loud input, which would hurt recognition just as much as
-        // being too quiet.
-        int32_t value = bit32_buffer[i] >> 10;
-        dest[i] = (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : (int16_t)value;
+    int mic_read = bytes_read / sizeof(int32_t);
+    if (!want_reference) {
+        for (int i = 0; i < mic_read; i++) {
+            // Reverted >>10 back to stock >>12 (2026-09-19): the >>10 gain
+            // bump was hard-clipping the mic at idle -- confirmed live via
+            // the vad_playback_test app's raw rms/min/max logging, which
+            // showed min/max pinned at the int16 rails (-32767/32767) with
+            // nobody talking. That's genuine signal saturation, not just
+            // "sounds noisy" -- >>10 amplified the noise floor (and any real
+            // signal) straight into clipping. If >>12 turns out
+            // under-sensitive again, try >>11 next rather than jumping back
+            // to >>10.
+            dest[i] = ClipToInt16(bit32_buffer[i] >> 12);
+        }
+        return mic_read;
     }
-    return samples;
+
+    // Interleave mono mic samples (M) with whatever's queued in the software
+    // AEC reference (R). A shortfall (speaker idle/underrun) is left at
+    // zero -- AEC correctly reads that as "no reference energy right now".
+    std::vector<int16_t> reference_samples(mic_read, 0);
+    {
+        std::lock_guard<std::mutex> ref_lock(reference_mutex_);
+        int take = std::min(static_cast<int>(reference_queue_.size()), mic_read);
+        std::copy(reference_queue_.begin(), reference_queue_.begin() + take, reference_samples.begin());
+        reference_queue_.erase(reference_queue_.begin(), reference_queue_.begin() + take);
+    }
+
+    for (int i = 0; i < mic_read; i++) {
+        dest[i * 2] = ClipToInt16(bit32_buffer[i] >> 12);  // see the >>12 comment above
+        dest[i * 2 + 1] = reference_samples[i];
+    }
+    return mic_read * 2;
 }
 
 void NoAudioCodec::EnableInput(bool enable) {

@@ -3,7 +3,8 @@
 #   Phase 3 adds: boards/synora/*sensor*.cc, pump/watering/telemetry
 #     (boards/common/button.cc + boards/synora/synora_board.cc + BLE
 #     provisioning/device activation started early -- see FEAT.md)
-#   Phase 4 adds: application.cc, device_state_machine.cc, display/*, ota.cc
+#   Phase 4 adds: application.cc, device_state_machine.cc, display/*
+#   (OTA landed early -- see boards/common/ota_updater.cc)
 set(SOURCES
     "main.cc"
     "settings.cc"
@@ -15,6 +16,8 @@ set(SOURCES
     "boards/common/button.cc"
     "boards/common/device_activation.cc"
     "boards/common/ble_provisioning.cc"
+    "boards/common/ota_updater.cc"
+    "boards/common/sha256.cc"
     "boards/common/synora_mqtt.cc"
     "boards/synora/synora_board.cc"
     "boards/synora/synora_display.cc"
@@ -84,4 +87,5 @@ idf_component_register(
     PRIV_REQUIRES nvs_flash esp_hw_support esp_system esp_psram esp_timer esp_driver_i2s esp_driver_i2c esp_driver_gpio
                   esp-sr button bt esp_wifi esp_netif esp_event esp_http_client esp_app_format mqtt esp_driver_spi esp_lcd
                   esp_lcd_ili9341 esp_audio_codec 78__esp-wifi-connect esp_adc saleca__vl53l1x_uld_esp_wrapper mbedtls console
+                  app_update esp_https_ota
 )

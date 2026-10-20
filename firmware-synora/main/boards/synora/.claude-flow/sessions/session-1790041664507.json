@@ -1,0 +1,15 @@
+{
+  "id": "session-1790041664507",
+  "startedAt": "2026-09-22T01:47:44.507Z",
+  "cwd": "/home/toan/bench/toan/synora/firmware-synora/main/boards/synora",
+  "context": {},
+  "metrics": {
+    "edits": 0,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "restoredAt": "2026-09-22T01:48:05.515Z",
+  "endedAt": "2026-09-22T09:17:43.330Z",
+  "duration": 26998824
+}

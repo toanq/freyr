@@ -6,7 +6,7 @@
 // the sensor at the top of the tank facing down at the water surface -- a
 // SHORTER measured distance means a HIGHER water level. Owns its own I2C
 // port/bus (see config.h's WATER_LEVEL_I2C_* comment for why it can't share
-// SHT31's bus).
+// a pre-existing bus handle).
 //
 // empty_distance_mm/full_distance_mm are the sensor readings expected at an
 // empty and a full tank respectively -- these depend on the physical mounting

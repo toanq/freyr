@@ -58,11 +58,23 @@ void SynoraMqtt::EnsureStarted() {
     // cert_pem/skip_cert_common_name_check set, now that the broker URI is
     // wss:// (Cloudflare-fronted) instead of the old plain mqtt://mosquitto.
     config.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
+    // esp-mqtt's own default (MQTT_TASK_STACK, 6*1024) is what MQTT_EVENT_DATA
+    // dispatch runs on -- i.e. every Subscribe() callback here, including
+    // EventHandler() -> SynoraVoiceSession::OnControlDown()'s cJSON parse +
+    // display updates for control/down. Confirmed live: a stack overflow in
+    // "mqtt_task" hit on the first sizeable payload (a tts:sentence_start
+    // reply, longer than the hello/stt/llm messages that had already come
+    // through fine) -- doubling here is a small, affordable ask against
+    // internal RAM (unlike the audio_input fix, this task has no PSRAM-stack
+    // option in esp_mqtt_client_config_t) for a callback chain that's JSON
+    // parsing and a few function calls, not DSP.
+    config.task.stack_size = 12288;
 
     client_ = esp_mqtt_client_init(&config);
     esp_mqtt_client_register_event(client_, MQTT_EVENT_ANY, EventHandler, this);
     esp_mqtt_client_start(client_);
     started_ = true;
+    publish_ack_semaphore_ = xSemaphoreCreateBinary();
     ESP_LOGI(TAG, "Starting, device id=%s", device_id_.c_str());
 
     // Baseline subscription every device wants, regardless of what board
@@ -150,12 +162,36 @@ void SynoraMqtt::SetDeviceReadyCallback(std::function<void()> callback) {
     device_ready_callback_ = std::move(callback);
 }
 
-void SynoraMqtt::Publish(const std::string& topic_suffix, const std::string& payload, int qos, bool retain) {
+int SynoraMqtt::Publish(const std::string& topic_suffix, const std::string& payload, int qos, bool retain) {
     if (client_ == nullptr) {
-        return;
+        return -1;
     }
     auto topic = DeviceTopic(device_id_, topic_suffix);
-    esp_mqtt_client_publish(client_, topic.c_str(), payload.data(), static_cast<int>(payload.size()), qos, retain);
+    return esp_mqtt_client_publish(client_, topic.c_str(), payload.data(), static_cast<int>(payload.size()), qos,
+                                    retain);
+}
+
+bool SynoraMqtt::PublishAndWaitForAck(const std::string& topic_suffix, const std::string& payload, int qos,
+                                      int timeout_ms) {
+    if (publish_ack_semaphore_ == nullptr) {
+        return false;
+    }
+    // Drain any stale "give" from an earlier, already-timed-out wait --
+    // otherwise this call could immediately (and wrongly) report success on
+    // an ack that belonged to a previous, unrelated publish.
+    xSemaphoreTake(publish_ack_semaphore_, 0);
+
+    int msg_id = Publish(topic_suffix, payload, qos, /*retain=*/false);
+    if (msg_id < 0) {
+        return false;
+    }
+    pending_publish_msg_id_.store(msg_id);
+    // The PUBACK can land before the store above -- EventHandler records
+    // every acked id, so check for that instead of waiting out the timeout.
+    if (last_acked_msg_id_.load() == msg_id) {
+        return true;
+    }
+    return xSemaphoreTake(publish_ack_semaphore_, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 }
 
 void SynoraMqtt::Subscribe(const std::string& topic_suffix, std::function<void(const std::string&)> callback) {
@@ -188,6 +224,12 @@ void SynoraMqtt::EventHandler(void* handler_args, esp_event_base_t, int32_t even
             }
             break;
         }
+        case MQTT_EVENT_PUBLISHED:
+            self->last_acked_msg_id_.store(event->msg_id);
+            if (event->msg_id == self->pending_publish_msg_id_.load()) {
+                xSemaphoreGive(self->publish_ack_semaphore_);
+            }
+            break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "Disconnected -- esp-mqtt will auto-reconnect");
             break;

@@ -50,3 +50,20 @@ bool IsMcpMessage(const std::string& payload) {
     cJSON_Delete(root);
     return is_mcp;
 }
+
+bool TryGetTtsSentenceText(const std::string& payload, std::string& out_text) {
+    cJSON* root = cJSON_ParseWithLength(payload.data(), payload.size());
+    if (root == nullptr) {
+        return false;
+    }
+    cJSON* type = cJSON_GetObjectItem(root, "type");
+    cJSON* state = cJSON_GetObjectItem(root, "state");
+    cJSON* text = cJSON_GetObjectItem(root, "text");
+    bool ok = cJSON_IsString(type) && std::string(type->valuestring) == "tts" && cJSON_IsString(state) &&
+              std::string(state->valuestring) == "sentence_start" && cJSON_IsString(text);
+    if (ok) {
+        out_text = text->valuestring;
+    }
+    cJSON_Delete(root);
+    return ok;
+}

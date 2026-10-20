@@ -51,3 +51,17 @@ TileStatus HumidityTileStatus(bool valid, float percent) {
     }
     return TileStatus::kGood;
 }
+
+const char* TileStatusToString(TileStatus status) {
+    switch (status) {
+        case TileStatus::kGood:
+            return "good";
+        case TileStatus::kWarn:
+            return "warn";
+        case TileStatus::kBad:
+            return "bad";
+        case TileStatus::kUnknown:
+        default:
+            return "unknown";
+    }
+}

@@ -1,0 +1,44 @@
+# VAD playback test app -- same physical board as the real Synora firmware
+# (ESP32-S3 N16R8: 16MB flash, 8MB octal PSRAM), trimmed to only what this
+# standalone app needs. PSRAM/cache values copied from
+# ../../sdkconfig.defaults.esp32s3 (the real firmware's reference values).
+
+# C++: exceptions + RTTI are used by the audio stack (AudioCodec/AfeAudioEngine).
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+CONFIG_COMPILER_CXX_EXCEPTIONS_EMG_POOL_SIZE=1024
+CONFIG_COMPILER_CXX_RTTI=y
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# Console/log over the native USB-Serial-JTAG peripheral, same as the real
+# firmware's test_console.cc (see its own doc comment for why).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Octal PSRAM.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2048
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=98304
+CONFIG_SPIRAM_MEMTEST=n
+
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# ESP-SR: VAD only, no WakeNet model packed (this app doesn't use wake-word
+# detection at all -- AfeAudioEngine::Initialize() with models_list==nullptr
+# just finds no wakenet model and leaves HasWakeWord() false).
+CONFIG_MODEL_IN_FLASH=y
+CONFIG_AFE_INTERFACE_V1=y
+CONFIG_SR_VADN_WEBRTC=y

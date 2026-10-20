@@ -1,0 +1,10 @@
+# VAD playback test app partition table. Single factory app slot (no OTA --
+# just reflash to iterate), plus the "model" SPIFFS partition esp-sr needs
+# for the VAD model, same offsets/sizing style as ../../partitions/16m.csv
+# (the real firmware's proven-working layout) minus the second OTA slot and
+# otadata, which this test app doesn't need.
+# Name,   Type, SubType, Offset,    Size,      Flags
+nvs,      data, nvs,     0x9000,    0x4000,
+phy_init, data, phy,     0xf000,    0x1000,
+factory,  app,  factory, 0x100000,  0x200000,
+model,    data, spiffs,  0x400000,  0x300000,

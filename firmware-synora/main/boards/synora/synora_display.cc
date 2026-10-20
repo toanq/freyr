@@ -282,11 +282,15 @@ esp_err_t SynoraDisplay::InitializePanel() {
     io_config.cs_gpio_num = DISPLAY_CS_GPIO;
     io_config.dc_gpio_num = DISPLAY_DC_GPIO;
     io_config.spi_mode = 0;
-    // 20MHz over jumper wires/breadboard is a common cause of torn/garbled
-    // frames (SPI signal integrity, not a software bug) -- dropped to 10MHz
-    // for reliable bring-up; raise once the wiring is confirmed solid
-    // (short leads, common ground) and frames come through clean.
-    io_config.pclk_hz = 10 * 1000 * 1000;
+    // Was dropped to 10MHz during bring-up on a hunch that jumper-wire signal
+    // integrity was causing torn/garbled frames -- turned out to be a red
+    // herring: the real cause was the framebuffer's DMA bounce-buffer
+    // allocation failing (see PushFramebuffer()'s band-height comment), which
+    // clock speed had nothing to do with. Back to 20MHz (the same default
+    // Espressif's own esp_lcd ILI9341 examples use) now that the wiring is
+    // confirmed solid and the actual bug is fixed; raise further only if
+    // frames stay clean.
+    io_config.pclk_hz = 20 * 1000 * 1000;
     io_config.trans_queue_depth = 10;
     io_config.lcd_cmd_bits = 8;
     io_config.lcd_param_bits = 8;
@@ -310,7 +314,12 @@ esp_err_t SynoraDisplay::InitializePanel() {
     // confirmed needed on real hardware (image was upside-down otherwise).
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_, true));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_, true, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, false)); // flip to true if colors look inverted on real hardware
+    // Confirmed on real hardware: this module is an IPS-type ILI9341 panel,
+    // whose native gamma curve without inversion renders every color as a
+    // pastel/washed-out version of itself (not a spatial negative) -- a
+    // known quirk of IPS ILI9341 variants, distinct from the TN-panel case
+    // where skipping this instead gives genuinely inverted hues.
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, true));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
     return ESP_OK;
 }

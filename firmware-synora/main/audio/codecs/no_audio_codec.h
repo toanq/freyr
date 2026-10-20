@@ -5,6 +5,7 @@
 
 #include <driver/gpio.h>
 #include <driver/i2s_pdm.h>
+#include <deque>
 #include <mutex>
 
 class NoAudioCodec : public AudioCodec {
@@ -18,6 +19,23 @@ protected:
 
 public:
     virtual ~NoAudioCodec();
+
+    // Software AEC reference: when enabled, every sample handed to Write()
+    // (the mono audio just sent to the speaker) is queued here, and Read()
+    // interleaves it back out as a second ("R") channel alongside the mono
+    // mic ("M") samples. This board has no hardware loopback path (mic and
+    // speaker are on separate I2S buses -- see NoAudioCodecSimplex), so a
+    // synthesized reference is the only way to give esp-sr's AFE something
+    // to cancel the speaker's own output against.
+    void EnableSoftwareAecReference(bool enable);
+
+private:
+    std::mutex reference_mutex_;
+    std::deque<int16_t> reference_queue_;
+    bool reference_enabled_ = false;
+    // Generous cap so a long idle Read() (e.g. input disabled for a while)
+    // can't grow this unboundedly -- oldest samples are dropped first.
+    static constexpr size_t kMaxReferenceQueueSamples = 16000 * 2;
 };
 
 class NoAudioCodecDuplex : public NoAudioCodec {

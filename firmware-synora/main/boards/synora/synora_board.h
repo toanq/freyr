@@ -6,17 +6,17 @@
 #include <mutex>
 #include <string>
 
-#include <driver/i2c_master.h>
 #include <esp_event.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
+#include "audio/audio_codec.h"
 #include "boards/common/button.h"
 #include "dashboard_status.h"
+#include "dht11_sensor.h"
 #include "led_indicator.h"
 #include "pump_driver.h"
 #include "sensor_readings.h"
-#include "sht31_sensor.h"
 #include "soil_moisture_sensor.h"
 #include "vl53l1x_water_level_sensor.h"
 #include "watering_scheduler.h"
@@ -35,6 +35,8 @@ public:
     // from SynoraDisplay's AnimationTask on its own (slower-than-60fps)
     // cadence -- not on a dedicated task, matching this codebase's general
     // one-task-per-concern style (see synora_display.cc's AnimationTask).
+    // Also called from TelemetryTask and the test console; serialized by
+    // sensor_io_mutex_.
     void RefreshSensors();
     SensorReadings GetSensorReadings() const;
 
@@ -73,6 +75,14 @@ public:
     // tiles as if nothing were wrong.
     bool IsWifiLostRecoveryActive() const { return ble_resumed_for_wifi_loss_.load(); }
 
+    // Wired from main.cc right after the codec's own Start()/EnableOutput()
+    // -- not available at construction time (this board is a static, built
+    // before the codec exists; see main.cc's app_main()). Lets TriggerFindMe()
+    // play an audible chime instead of just blinking the LED/showing the
+    // ping animation. A nullptr codec_ (SetAudioCodec() never called, e.g. in
+    // a host-side unit test) just means TriggerFindMe() skips the audio.
+    void SetAudioCodec(AudioCodec* codec) { codec_ = codec; }
+
 private:
     void InitializeFactoryResetButton();
     void InitializeVoiceButton();
@@ -85,6 +95,7 @@ private:
     void FactoryReset();
     void HandleWaterCommand(const std::string& payload);
     void HandlePingCommand();
+    void HandleOtaCommand(const std::string& payload);
 
     // Called every TelemetryTask tick -- resumes BLE advertising
     // (BleProvisioning::Init(), already idempotent) once WiFi has been down
@@ -118,17 +129,20 @@ private:
 
     Button boot_button_;
 
-    i2c_master_bus_handle_t board_i2c_bus_ = nullptr;  // BOARD_I2C_PORT: SHT31 only, see config.h
-    std::unique_ptr<Sht31Sensor> sht31_;
+    std::unique_ptr<Dht11Sensor> dht11_;
     std::unique_ptr<WaterLevelSensor> water_level_;  // owns its own I2C_NUM_1 bus internally
     std::unique_ptr<SoilMoistureSensor> soil_moisture_;
 
+    // RefreshSensors() runs from the display, telemetry and console tasks;
+    // the bit-banged DHT11 and VL53L1X reads must not interleave.
+    std::mutex sensor_io_mutex_;
     mutable std::mutex sensor_readings_mutex_;
     SensorReadings sensor_readings_;
 
     PumpDriver pump_;
     LedIndicator find_me_led_;
     WateringScheduler watering_scheduler_;
+    AudioCodec* codec_ = nullptr;  // see SetAudioCodec()
 
     // Updated from WifiManager's event callback (fires on the WiFi event
     // task) -- read from SynoraDisplay's own task via GetWifiStatus(), so

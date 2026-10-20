@@ -1,5 +1,8 @@
 #include "ble_provisioning.h"
 
+#include <cctype>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <vector>
@@ -23,6 +26,7 @@
 
 #include "boards/synora/synora_display.h"
 #include "device_activation.h"
+#include "ota_updater.h"
 #include "ssid_manager.h"
 #include "synora_mqtt.h"
 #include "wifi_manager.h"
@@ -53,6 +57,12 @@ static const ble_uuid128_t kControlUuid =
 static const ble_uuid128_t kStatusUuid =
     BLE_UUID128_INIT(0xca, 0x3c, 0x76, 0x63, 0x98, 0xfc, 0x11, 0xa5, 0x90, 0x49, 0x14, 0xa0, 0x05, 0x3f, 0x3d, 0x48);
 
+// Not in the reference firmware's table above (that one is fixed) -- freshly
+// generated for the BLE firmware-push fallback OTA path added here. Write
+// only: carries raw .bin chunks, never read back.
+static const ble_uuid128_t kFirmwareUuid =
+    BLE_UUID128_INIT(0x4f, 0x8e, 0x1b, 0x2d, 0x6a, 0x77, 0x4c, 0x1e, 0x9f, 0x3a, 0x5d, 0x02, 0x8b, 0x4e, 0x7c, 0x91);
+
 // Advertise for a limited window, then restart (see GapEventHandler's
 // BLE_GAP_EVENT_ADV_COMPLETE case) -- kept up indefinitely while still
 // inited_, this window is just how NimBLE's ble_gap_adv_start() itself is
@@ -76,9 +86,9 @@ namespace {
 // (WifiManager/SynoraDisplay calls, BLE GAP/GATT ops). 4096 wasn't enough --
 // confirmed live: "A stack overflow in task ble_prov_task has been
 // detected" during the activation POST, crashing the whole device mid-pair.
-void ScheduleOnTask(std::function<void()> fn) {
+bool ScheduleOnTask(std::function<void()> fn) {
     auto* heap_fn = new std::function<void()>(std::move(fn));
-    xTaskCreate(
+    BaseType_t rc = xTaskCreate(
         [](void* arg) {
             auto* heap_fn = static_cast<std::function<void()>*>(arg);
             (*heap_fn)();
@@ -86,6 +96,12 @@ void ScheduleOnTask(std::function<void()> fn) {
             vTaskDelete(nullptr);
         },
         "ble_prov_task", 8192, heap_fn, 5, nullptr);
+    if (rc != pdPASS) {
+        ESP_LOGE(TAG, "ScheduleOnTask: xTaskCreate failed");
+        delete heap_fn;
+        return false;
+    }
+    return true;
 }
 
 // Copies an mbuf chain into a std::string. Shared by every write-type access callback.
@@ -140,6 +156,13 @@ esp_err_t BleProvisioning::Init() {
     ble_hs_cfg.gatts_register_cb = GattSvrRegisterCb;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
+    // NimBLE's default 23-byte ATT MTU (20-byte write payload) would make
+    // the BLE firmware-push path (FirmwareAccessCb) impractically slow --
+    // this just states a preference; the actually negotiated value (which
+    // can come back lower, e.g. on an older phone) is logged from
+    // BLE_GAP_EVENT_MTU in GapEventHandler below.
+    ble_att_set_preferred_mtu(517);
+
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
@@ -171,6 +194,9 @@ esp_err_t BleProvisioning::Deinit() {
     }
     esp_bt_controller_disable();
     esp_bt_controller_deinit();
+
+    // Otherwise a half-written image's open handle survives into the next Init().
+    ResetOtaState(/*abort=*/true);
 
     inited_ = false;
     return ESP_OK;
@@ -247,6 +273,8 @@ int BleProvisioning::GapEventHandler(ble_gap_event* event, void* arg) {
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "BLE central disconnected, reason=%d", event->disconnect.reason);
             self.conn_handle_ = 0;
+            // A transfer can't resume across connections -- abort it now.
+            self.ResetOtaState(/*abort=*/true);
             if (self.inited_) {
                 self.StartAdvertising();
             }
@@ -262,6 +290,9 @@ int BleProvisioning::GapEventHandler(ble_gap_event* event, void* arg) {
             break;
         case BLE_GAP_EVENT_SUBSCRIBE:
             ESP_LOGI(TAG, "Subscribe event, attr_handle=%d", event->subscribe.attr_handle);
+            break;
+        case BLE_GAP_EVENT_MTU:
+            ESP_LOGI(TAG, "ATT MTU negotiated: conn_handle=%d mtu=%d", event->mtu.conn_handle, event->mtu.value);
             break;
         case BLE_GAP_EVENT_ADV_COMPLETE:
             // ble_gap_adv_start()'s duration (kAdvertiseWindowMs) elapsed with no
@@ -324,6 +355,14 @@ esp_err_t BleProvisioning::RegisterGattService() {
             .uuid = &kStatusUuid.u,
             .access_cb = StatusAccessCb,
             .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        },
+        {
+            .uuid = &kFirmwareUuid.u,
+            .access_cb = FirmwareAccessCb,
+            // Accept both -- the app streams chunks "without response" for
+            // throughput, but plain WRITE works too (e.g. a manual test via
+            // a generic BLE inspector tool).
+            .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
         },
         {0}, // terminator
     };
@@ -468,6 +507,29 @@ int BleProvisioning::ControlAccessCb(uint16_t, uint16_t, ble_gatt_access_ctxt* c
         self.HandleReactivate();
     } else if (command == "reconnect") {
         self.HandleReconnect();
+    } else if (command.rfind("ota_start:", 0) == 0) {
+        // "ota_start:<size>:<sha256-hex>"
+        std::string rest = command.substr(strlen("ota_start:"));
+        size_t sep = rest.find(':');
+        if (sep == std::string::npos) {
+            ESP_LOGW(TAG, "Malformed ota_start command: %s", command.c_str());
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        // strtoull alone accepts "-1" (wrapping to OTA_SIZE_UNKNOWN, i.e. erase
+        // the whole partition) and trailing junk -- require plain digits only.
+        std::string size_str = rest.substr(0, sep);
+        char* end = nullptr;
+        errno = 0;
+        unsigned long long parsed = size_str.empty() || size_str[0] < '0' || size_str[0] > '9'
+                                        ? 0
+                                        : strtoull(size_str.c_str(), &end, 10);
+        if (parsed == 0 || errno != 0 || end == nullptr || *end != '\0' || parsed >= OTA_WITH_SEQUENTIAL_WRITES) {
+            ESP_LOGW(TAG, "ota_start: invalid size \"%s\"", size_str.c_str());
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        self.HandleOtaStart(static_cast<size_t>(parsed), rest.substr(sep + 1));
+    } else if (command == "ota_commit") {
+        self.HandleOtaCommit();
     } else {
         ESP_LOGW(TAG, "Unknown control command: %s", command.c_str());
         return BLE_ATT_ERR_UNLIKELY;
@@ -480,8 +542,25 @@ int BleProvisioning::StatusAccessCb(uint16_t, uint16_t, ble_gatt_access_ctxt* ct
         return BLE_ATT_ERR_READ_NOT_PERMITTED;
     }
 
+    auto& self = GetInstance();
+
+    // A BLE firmware push in progress (or its failure) is more specific and
+    // more urgent than whatever provisioning state preceded it, so it takes
+    // priority over the switch below. ota_error_ latches until the next
+    // ota_start, so a failed transfer stays visible even after
+    // ota_in_progress_ is cleared.
+    if (self.ota_committing_.load()) {
+        return WriteStringReply(ctxt, "ota_progress:" + std::to_string(self.ota_progress_percent_.load()));
+    }
+    if (!self.ota_error_.empty()) {
+        return WriteStringReply(ctxt, "ota_error:" + self.ota_error_);
+    }
+    if (self.ota_in_progress_.load()) {
+        return WriteStringReply(ctxt, "ota_progress:" + std::to_string(self.ota_progress_percent_.load()));
+    }
+
     const char* status_str = "idle";
-    switch (GetInstance().state_) {
+    switch (self.state_) {
         case ProvisioningState::kIdle: status_str = "idle"; break;
         case ProvisioningState::kJoining: status_str = "joining"; break;
         case ProvisioningState::kOnline: status_str = "online"; break;
@@ -784,6 +863,222 @@ void BleProvisioning::HandleReconnect() {
         self.SetState(connected ? ProvisioningState::kOnline : ProvisioningState::kError);
         self.NotifyStatus();
     });
+}
+
+// `control: "ota_start:<size>:<sha256>"` -- begins a BLE-pushed firmware
+// update (the no-WiFi/unprovisioned fallback; see ota_updater.h for the
+// WiFi/MQTT-triggered path). Runs directly on the GATT callback's task,
+// unlike HandleCommit/HandleRescan/etc -- esp_ota_begin() is only fast here
+// because of OTA_WITH_SEQUENTIAL_WRITES: passing the declared size instead
+// would erase that whole range synchronously (seconds of flash work, stalling
+// the BLE host). esp_ota_write() then erases one sector at a time as chunks
+// arrive; the declared size is still enforced via ota_expected_size_.
+void BleProvisioning::HandleOtaStart(size_t size, const std::string& sha256_hex) {
+    if (ota_committing_.load()) {
+        ESP_LOGW(TAG, "ota_start: previous ota_commit still finishing -- ignored");
+        return;
+    }
+    // A repeated ota_start restarts the transfer from scratch.
+    ResetOtaState(/*abort=*/true);
+
+    std::string sha256_lower = sha256_hex;
+    bool sha_ok = sha256_lower.size() == 64;
+    for (char& c : sha256_lower) {
+        if (!isxdigit(static_cast<unsigned char>(c))) {
+            sha_ok = false;
+            break;
+        }
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    }
+    if (size == 0 || !sha_ok) {
+        ESP_LOGW(TAG, "ota_start: invalid size=%u or sha256 \"%s\"", (unsigned)size, sha256_hex.c_str());
+        ota_error_ = "invalid ota_start parameters";
+        NotifyStatus();
+        return;
+    }
+
+    const esp_partition_t* partition = esp_ota_get_next_update_partition(nullptr);
+    if (partition == nullptr) {
+        ESP_LOGE(TAG, "ota_start: no free OTA partition");
+        ota_error_ = "no free OTA partition";
+        NotifyStatus();
+        return;
+    }
+    if (size > partition->size) {
+        ESP_LOGW(TAG, "ota_start: size %u exceeds partition \"%s\" (%u bytes)", (unsigned)size, partition->label,
+                 (unsigned)partition->size);
+        ota_error_ = "image larger than OTA partition";
+        NotifyStatus();
+        return;
+    }
+
+    if (!OtaUpdater::TryClaim()) {
+        ESP_LOGW(TAG, "ota_start: a WiFi OTA is already in progress");
+        ota_error_ = "another OTA in progress";
+        NotifyStatus();
+        return;
+    }
+
+    esp_err_t err = esp_ota_begin(partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle_);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        OtaUpdater::Release();
+        ota_handle_ = 0;
+        ota_error_ = "esp_ota_begin failed";
+        NotifyStatus();
+        return;
+    }
+
+    Sha256Init(ota_sha256_ctx_);
+
+    ota_partition_ = partition;
+    ota_expected_size_ = size;
+    ota_expected_sha256_ = sha256_lower;
+    ota_bytes_written_ = 0;
+    ota_error_.clear();
+    ota_progress_percent_ = 0;
+    ota_in_progress_ = true;
+    ESP_LOGI(TAG, "BLE OTA started: %u bytes expected, target partition \"%s\"", (unsigned)size,
+             ota_partition_->label);
+    NotifyStatus();
+}
+
+int BleProvisioning::FirmwareAccessCb(uint16_t, uint16_t, ble_gatt_access_ctxt* ctxt, void*) {
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+    }
+
+    auto& self = GetInstance();
+    if (!self.ota_in_progress_.load() || self.ota_committing_.load()) {
+        ESP_LOGW(TAG, "firmware chunk received with no ota_start in progress -- dropped");
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    // Raw bytes, not ReadOmToString -- a firmware image isn't UTF-8-safe, and
+    // a NUL byte inside it would otherwise silently truncate a std::string
+    // built from it.
+    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    std::vector<uint8_t> chunk(len);
+    ble_hs_mbuf_to_flat(ctxt->om, chunk.data(), len, nullptr);
+
+    if (self.ota_bytes_written_ + len > self.ota_expected_size_) {
+        ESP_LOGE(TAG, "firmware chunk overruns declared size (%u + %u > %u) -- aborting",
+                 (unsigned)self.ota_bytes_written_, (unsigned)len, (unsigned)self.ota_expected_size_);
+        self.ResetOtaState(/*abort=*/true);
+        self.ota_error_ = "received more bytes than declared";
+        self.NotifyStatus();
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    esp_err_t err = esp_ota_write(self.ota_handle_, chunk.data(), chunk.size());
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+        self.ResetOtaState(/*abort=*/true);
+        self.ota_error_ = "esp_ota_write failed";
+        self.NotifyStatus();
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    Sha256Update(self.ota_sha256_ctx_, chunk.data(), chunk.size());
+    self.ota_bytes_written_ += len;
+
+    int percent = static_cast<int>((self.ota_bytes_written_ * 100) / self.ota_expected_size_);
+    if (percent != self.ota_progress_percent_.load()) {
+        self.ota_progress_percent_ = percent;
+        self.NotifyStatus();
+    }
+    return 0;
+}
+
+// `control: "ota_commit"` -- verifies the accumulated image against what
+// ota_start declared, then flashes it live. The work itself runs in
+// FinishOtaCommit() on a ScheduleOnTask task; esp_restart() there means it
+// never returns on success.
+void BleProvisioning::HandleOtaCommit() {
+    if (!ota_in_progress_.load() || ota_committing_.load()) {
+        ESP_LOGW(TAG, "ota_commit received with no ota_start in progress (or a commit already running)");
+        return;
+    }
+    ota_committing_.store(true);
+    if (!ScheduleOnTask([]() { GetInstance().FinishOtaCommit(); })) {
+        ESP_LOGE(TAG, "ota_commit: failed to start commit task");
+        ClearOtaState(/*abort=*/true);
+        ota_error_ = "commit task creation failed";
+        ota_committing_.store(false);
+        NotifyStatus();
+    }
+}
+
+void BleProvisioning::FinishOtaCommit() {
+    // ota_error_ is written before ota_committing_ clears, so StatusAccessCb
+    // (host task) never reads it mid-write.
+    auto fail = [this](const char* error, bool abort) {
+        ClearOtaState(abort);
+        ota_error_ = error;
+        ota_committing_.store(false);
+        NotifyStatus();
+    };
+
+    if (ota_bytes_written_ != ota_expected_size_) {
+        ESP_LOGE(TAG, "ota_commit: size mismatch, got %u expected %u", (unsigned)ota_bytes_written_,
+                 (unsigned)ota_expected_size_);
+        fail("size mismatch", /*abort=*/true);
+        return;
+    }
+
+    unsigned char digest[32];
+    Sha256Final(ota_sha256_ctx_, digest);
+    char digest_hex[65];
+    for (int i = 0; i < 32; i++) {
+        snprintf(digest_hex + i * 2, 3, "%02x", digest[i]);
+    }
+    if (ota_expected_sha256_ != digest_hex) {
+        ESP_LOGE(TAG, "ota_commit: sha256 mismatch, got %s expected %s", digest_hex, ota_expected_sha256_.c_str());
+        fail("sha256 mismatch", /*abort=*/true);
+        return;
+    }
+
+    // esp_ota_end() releases the handle even on failure -- no abort after it.
+    esp_err_t err = esp_ota_end(ota_handle_);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
+        fail("esp_ota_end failed", /*abort=*/false);
+        return;
+    }
+
+    err = esp_ota_set_boot_partition(ota_partition_);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        fail("esp_ota_set_boot_partition failed", /*abort=*/false);
+        return;
+    }
+
+    ESP_LOGI(TAG, "BLE OTA committed, rebooting into new image");
+    ota_progress_percent_ = 100;
+    NotifyStatus();
+    vTaskDelay(pdMS_TO_TICKS(200)); // let the notify above actually go out before the radio dies
+    esp_restart();
+}
+
+void BleProvisioning::ResetOtaState(bool abort) {
+    if (ota_committing_.load()) {
+        return; // FinishOtaCommit() owns the handle until it reboots or fails
+    }
+    ClearOtaState(abort);
+}
+
+void BleProvisioning::ClearOtaState(bool abort) {
+    if (ota_in_progress_.exchange(false)) {
+        if (abort) {
+            esp_ota_abort(ota_handle_);
+        }
+        OtaUpdater::Release();
+    }
+    ota_handle_ = 0;
+    ota_partition_ = nullptr;
+    ota_expected_size_ = 0;
+    ota_expected_sha256_.clear();
+    ota_bytes_written_ = 0;
+    ota_progress_percent_ = 0;
 }
 
 void BleProvisioning::SetState(ProvisioningState state) {

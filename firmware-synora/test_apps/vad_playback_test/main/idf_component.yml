@@ -1,0 +1,11 @@
+## IDF Component Manager manifest for the VAD playback test app.
+## Deliberately minimal compared to ../../main/idf_component.yml -- no
+## mqtt/78-esp-wifi-connect/vl53l1x/esp_audio_codec: this app never talks to
+## the server. esp_lcd_ili9341 IS pulled in (unlike before) for main.cc's own
+## minimal on-TFT status screen -- see main/CMakeLists.txt's comment.
+dependencies:
+  idf:
+    version: ">=5.5.2"
+  espressif/esp-sr: ~2.4.6   # AFE (VAD)
+  espressif/button: ~4.2.0   # BOOT-button press/click, reusing ../../main/boards/common/button.cc
+  espressif/esp_lcd_ili9341: ^2.1.0   # TFT status screen, same panel/driver as ../../main/boards/synora/synora_display.cc

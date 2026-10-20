@@ -4,8 +4,10 @@
 
 #include "boards/common/ble_provisioning.h"
 #include "boards/common/device_activation.h"
+#include "boards/common/ota_updater.h"
 #include "boards/common/synora_mqtt.h"
 #include "mcp_server.h"
+#include "ping_audio.h"
 #include "synora_display.h"
 #include "synora_voice_session.h"
 #include "wifi_manager.h"
@@ -14,12 +16,15 @@
 #include <esp_app_desc.h>
 #include <esp_log.h>
 #include <esp_netif.h>
+#include <esp_ota_ops.h>
 #include <esp_system.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 #define TAG "SynoraBoard"
 
@@ -145,6 +150,7 @@ void SynoraBoard::PublishTelemetry() {
     if (r.water_level_valid) {
         cJSON_AddNumberToObject(root, "waterLevelPercent", r.water_level_percent);
     }
+    cJSON_AddStringToObject(root, "firmwareVersion", esp_app_get_description()->version);
 
     char* json = cJSON_PrintUnformatted(root);
     ESP_LOGI(TAG, "Publishing telemetry: %s", json);
@@ -154,26 +160,17 @@ void SynoraBoard::PublishTelemetry() {
 }
 
 void SynoraBoard::InitializeSensors() {
-    i2c_master_bus_config_t bus_config = {};
-    bus_config.i2c_port = BOARD_I2C_PORT;
-    bus_config.sda_io_num = BOARD_I2C_SDA_GPIO;
-    bus_config.scl_io_num = BOARD_I2C_SCL_GPIO;
-    bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
-    bus_config.glitch_ignore_cnt = 7;
-    bus_config.flags.enable_internal_pullup = true;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &board_i2c_bus_));
-
-    sht31_ = std::make_unique<Sht31Sensor>(board_i2c_bus_, SHT31_I2C_ADDR);
+    dht11_ = std::make_unique<Dht11Sensor>(DHT11_GPIO);
     soil_moisture_ = std::make_unique<SoilMoistureSensor>(SOIL_MOISTURE_ADC_UNIT, SOIL_MOISTURE_ADC_CHANNEL);
-    // Its own dedicated I2C_NUM_1 bus, not board_i2c_bus_ -- see config.h.
+    // Its own dedicated I2C_NUM_1 bus -- see config.h.
     water_level_ = std::make_unique<WaterLevelSensor>(WATER_LEVEL_SDA_GPIO, WATER_LEVEL_SCL_GPIO, WATER_LEVEL_I2C_PORT,
                                                        WATER_LEVEL_EMPTY_DISTANCE_MM, WATER_LEVEL_FULL_DISTANCE_MM);
 
     // One-shot read at boot, logged, so sensor wiring can be verified before
-    // the display's dashboard screen exists to show it (construction above
-    // succeeds even if a sensor isn't actually reachable on the bus --
-    // I2cDevice::I2cDevice() only registers the address, it doesn't talk to
-    // the device -- so this is the first real communication check).
+    // the display's dashboard screen exists to show it -- every sensor's
+    // constructor above just stores config (GPIO/ADC channel/bus params)
+    // without talking to the hardware, so this is the first real
+    // communication check for all of them.
     RefreshSensors();
     SensorReadings r = GetSensorReadings();
     ESP_LOGI(TAG, "Sensor check: temp=%s%.1fC humidity=%s%.1f%% soil=%s%.1f%% water=%s%.1f%%",
@@ -185,9 +182,10 @@ void SynoraBoard::InitializeSensors() {
 
 void SynoraBoard::RefreshSensors() {
     SensorReadings readings;
+    std::lock_guard<std::mutex> io_lock(sensor_io_mutex_);
     readings.temperature_valid =
-        sht31_->Read(readings.temperature_celsius, readings.humidity_percent);
-    readings.humidity_valid = readings.temperature_valid;  // one SHT31 read yields both
+        dht11_->Read(readings.temperature_celsius, readings.humidity_percent);
+    readings.humidity_valid = readings.temperature_valid;  // one DHT11 read yields both
     readings.soil_moisture_valid = soil_moisture_->ReadPercent(readings.soil_moisture_percent);
     readings.water_level_valid = water_level_->ReadPercent(readings.water_level_percent);
 
@@ -212,6 +210,9 @@ void SynoraBoard::InitializeCommandHandlers() {
     });
     SynoraMqtt::GetInstance().Subscribe("commands/ping", [this](const std::string&) {
         HandlePingCommand();
+    });
+    SynoraMqtt::GetInstance().Subscribe("commands/ota", [this](const std::string& payload) {
+        HandleOtaCommand(payload);
     });
 }
 
@@ -260,6 +261,51 @@ void SynoraBoard::HandlePingCommand() {
     }
 }
 
+// Payload shape mirrors Synora.Api's PublishOtaCommandAsync:
+// {"version": "<string>", "url": "<string>"}. Skips the download if already
+// on `version` -- lets the server fire this unconditionally (e.g. a retry or
+// a broadcast to a group of devices) without every device needing to be told
+// its own current version first. Not queued like water/ping -- OtaUpdater
+// runs the download/flash on its own task, so there's nothing here to
+// serialize against.
+void SynoraBoard::HandleOtaCommand(const std::string& payload) {
+    cJSON* root = cJSON_Parse(payload.c_str());
+    if (root == nullptr) {
+        ESP_LOGW(TAG, "commands/ota: malformed JSON payload");
+        return;
+    }
+    cJSON* version = cJSON_GetObjectItem(root, "version");
+    cJSON* url = cJSON_GetObjectItem(root, "url");
+    if (!cJSON_IsString(version) || !cJSON_IsString(url)) {
+        ESP_LOGW(TAG, "commands/ota: missing/invalid version or url");
+        cJSON_Delete(root);
+        return;
+    }
+
+    const esp_app_desc_t* app_desc = esp_app_get_description();
+    if (strcmp(version->valuestring, app_desc->version) == 0) {
+        ESP_LOGI(TAG, "commands/ota: already on version %s, skipping", app_desc->version);
+        cJSON_Delete(root);
+        return;
+    }
+    // Same guard as IDF's advanced_https_ota example: a version that already
+    // failed to boot (rolled back) would just download/crash/roll back forever.
+    const esp_partition_t* invalid_partition = esp_ota_get_last_invalid_partition();
+    esp_app_desc_t invalid_desc;
+    if (invalid_partition != nullptr &&
+        esp_ota_get_partition_description(invalid_partition, &invalid_desc) == ESP_OK &&
+        strcmp(version->valuestring, invalid_desc.version) == 0) {
+        ESP_LOGW(TAG, "commands/ota: version %s previously failed to boot (rolled back), skipping",
+                 invalid_desc.version);
+        cJSON_Delete(root);
+        return;
+    }
+
+    ESP_LOGI(TAG, "commands/ota: updating %s -> %s", app_desc->version, version->valuestring);
+    OtaUpdater::ApplyUpdate(url->valuestring);
+    cJSON_Delete(root);
+}
+
 // Shared by WaterQueueTask() (MQTT commands/water) and the self.do_watering
 // MCP tool -- both just need "run the pump for N seconds and mirror it on
 // the display", the safety clamp itself lives in PumpDriver::RunFor.
@@ -276,6 +322,14 @@ int SynoraBoard::WaterFor(int duration_seconds) {
 void SynoraBoard::TriggerFindMe() {
     find_me_led_.Blink(4);
     SynoraDisplay::GetInstance().ShowPing();
+    if (codec_ != nullptr) {
+        // Blocks for the chime's ~0.9s duration -- same accepted tradeoff as
+        // self.do_watering's synchronous WaterFor() call on this same
+        // (MQTT client or ping-queue) task, see InitializeMcpTools()'s doc
+        // comment on DoToolCall().
+        std::vector<int16_t> ping(kPingAudioPcm, kPingAudioPcm + kPingAudioSampleCount);
+        codec_->OutputData(ping);
+    }
 }
 
 // Runs the whole life of the program, one water request at a time -- pops
@@ -329,8 +383,10 @@ void SynoraBoard::InitializeMcpTools() {
 
     mcp.AddTool("self.get_sensor_readings",
         "Get the plant's current sensor readings: air temperature (Celsius), air humidity (percent), "
-        "soil moisture (percent), and water tank level (percent). Use this to answer questions about "
-        "how the plant or its environment is doing.",
+        "soil moisture (percent), and water tank level (percent). Each reading also comes with its own "
+        "good/warn/bad status, plus an overall potStatus (the worst of the individual statuses) "
+        "summarizing how the plant is doing at a glance. Use this to answer questions about how the "
+        "plant or its environment is doing, or whether it needs attention (e.g. watering).",
         PropertyList(),
         [this](const PropertyList&) -> ReturnValue {
             return BuildSensorReadingsJson(GetSensorReadings());
@@ -338,9 +394,10 @@ void SynoraBoard::InitializeMcpTools() {
 
     mcp.AddTool("self.do_watering",
         "Run the water pump to water the plant for the given number of seconds (1-300). "
-        "Use this when the user asks to water the plant.",
+        "Use this when the user asks to water the plant. If the user doesn't say how long, "
+        "just omit duration_seconds -- it defaults to 10 seconds.",
         PropertyList({
-            Property("duration_seconds", kPropertyTypeInteger, 1, 300)
+            Property("duration_seconds", kPropertyTypeInteger, /*default_value=*/10, /*min=*/1, /*max=*/300)
         }),
         [this](const PropertyList& properties) -> ReturnValue {
             WaterFor(properties["duration_seconds"].value<int>());
@@ -348,7 +405,9 @@ void SynoraBoard::InitializeMcpTools() {
         });
 
     mcp.AddTool("self.find_device",
-        "Blink the device's LED and show a ping animation, so the user can visually locate the device.",
+        "Ring a short chime, blink the device's LED, and show a ping animation, so the user can hear "
+        "and see where the device is. Use this when the user asks to find/locate the pot or wants it "
+        "to make a sound (e.g. \"ring the bell\", \"where are you\").",
         PropertyList(),
         [this](const PropertyList&) -> ReturnValue {
             TriggerFindMe();
