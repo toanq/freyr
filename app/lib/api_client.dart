@@ -5,6 +5,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
+import 'app_config.dart';
+
 // Carries the HTTP status code so callers can react to specific statuses
 // (e.g. 409 "already paired") instead of only having a generic error string.
 class ApiException implements Exception {
@@ -23,7 +25,8 @@ class ApiClient {
   // (every connect attempt failed right after boot), even though a phone on
   // cellular could reach the same address fine. Port 443 via the domain is
   // far more likely to pass through a router/ISP that specifically blocks 80.
-  ApiClient({this.baseUrl = 'https://synora.carcise.dev/api'});
+  // main() passes the platform-configured URL (see app_config.dart).
+  ApiClient({this.baseUrl = defaultApiBaseUrl});
 
   // The backend only listens behind Traefik (docker-compose.yml), which strips
   // `/api` before forwarding — same convention the web console uses (VITE_API_URL=/api).

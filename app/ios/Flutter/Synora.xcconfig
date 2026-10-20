@@ -1,0 +1,4 @@
+// Synora build settings, included by Debug.xcconfig and Release.xcconfig.
+// API base URL baked into Info.plist (SynoraApiBaseUrl), read at startup by
+// lib/app_config.dart. "//" starts a comment in xcconfig, hence https:/$()/.
+SYNORA_API_BASE_URL = https:/$()/synora.id.vn/api

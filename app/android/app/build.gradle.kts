@@ -32,6 +32,9 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Server the app talks to -- see android/gradle.properties and app/README.md.
+        manifestPlaceholders["synoraApiBaseUrl"] =
+            (project.findProperty("synoraApiBaseUrl") as String?) ?: "https://synora.id.vn/api"
     }
 
     buildTypes {

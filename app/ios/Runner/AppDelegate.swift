@@ -12,5 +12,18 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    // Build-time config for Dart (lib/app_config.dart): the API base URL comes
+    // from Info.plist's SynoraApiBaseUrl, set via ios/Flutter/Synora.xcconfig.
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "SynoraConfig") {
+      let channel = FlutterMethodChannel(name: "synora/config", binaryMessenger: registrar.messenger())
+      channel.setMethodCallHandler { call, result in
+        if call.method == "apiBaseUrl" {
+          result(Bundle.main.object(forInfoDictionaryKey: "SynoraApiBaseUrl") as? String)
+        } else {
+          result(FlutterMethodNotImplemented)
+        }
+      }
+    }
   }
 }

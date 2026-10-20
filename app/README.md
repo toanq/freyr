@@ -59,6 +59,33 @@ Caches persisted on the host so they survive container recreation:
 Tear down with `docker compose -f docker-compose.dev.yml down` (the host
 cache directories are untouched by this).
 
+## Server URL
+
+The app reads its API base URL (default `https://synora.id.vn/api`) from
+platform build metadata at startup (`lib/app_config.dart`), not from Dart
+code. Everything that needs the server -- API calls and the `server_url` sent
+to a device during BLE pairing -- uses that one value. Invalid or missing
+values (must be an absolute `https://` URL) fall back to the default.
+
+- **Android**: `synoraApiBaseUrl` in `android/gradle.properties`, baked into
+  the manifest as `<meta-data android:name="synora.api_base_url">`. Override
+  for one build without editing files:
+
+  ```bash
+  flutter build apk --release --android-project-arg synoraApiBaseUrl=https://example.com/api
+  # or: ORG_GRADLE_PROJECT_synoraApiBaseUrl=https://example.com/api flutter build apk --release
+  ```
+
+  Check an APK with
+  `aapt2 dump xmltree app-release.apk --file AndroidManifest.xml | grep -A2 synora.api_base_url`.
+- **iOS**: `SYNORA_API_BASE_URL` in `ios/Flutter/Synora.xcconfig`, which feeds
+  the `SynoraApiBaseUrl` key in `Info.plist`. Write `https:/$()/host/api` --
+  `//` starts a comment in xcconfig files.
+
+The value is fixed at build time. Changing it in an already-built APK means
+decoding, editing and repackaging it (e.g. with apktool) and re-signing it --
+not a code change, but still a new APK.
+
 Release APKs currently sign with the **debug** keystore too (see
 `android/app/build.gradle.kts`'s `release` buildType) — a deliberate stopgap,
 not yet a proper release-signing setup.

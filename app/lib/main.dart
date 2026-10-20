@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'api_client.dart';
+import 'app_config.dart';
 import 'auth/auth_screen.dart';
 import 'devices/device_list_screen.dart';
 import 'push_notifications.dart';
@@ -24,7 +25,11 @@ void main() async {
   } catch (_) {
     // Non-fatal -- push notifications are optional, the app works without them.
   }
-  runApp(const ProviderScope(child: SynoraApp()));
+  final apiBaseUrl = await loadApiBaseUrl();
+  runApp(ProviderScope(
+    overrides: [apiClientProvider.overrideWithValue(ApiClient(baseUrl: apiBaseUrl))],
+    child: const SynoraApp(),
+  ));
 }
 
 class SynoraApp extends ConsumerStatefulWidget {

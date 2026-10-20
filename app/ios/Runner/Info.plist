@@ -72,5 +72,8 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- API base URL read by lib/app_config.dart; set in ios/Flutter/Synora.xcconfig. -->
+	<key>SynoraApiBaseUrl</key>
+	<string>$(SYNORA_API_BASE_URL)</string>
 </dict>
 </plist>
