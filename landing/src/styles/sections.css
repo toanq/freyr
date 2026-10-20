@@ -1,0 +1,376 @@
+/* Hero */
+.hero {
+  min-height: min(100vh, 860px);
+  display: flex;
+  align-items: center;
+  padding: calc(var(--header-h) + 40px) 0 80px;
+  position: relative;
+  background:
+    linear-gradient(90deg, #fff 0%, rgba(255, 255, 255, 0.92) 30%, rgba(255, 255, 255, 0) 62%),
+    url('/img/hero-room.webp') right center / cover no-repeat;
+}
+
+.hero__inner {
+  max-width: 1200px;
+}
+
+.hero__title {
+  font-size: clamp(2.2rem, 5.5vw, 4rem);
+  font-weight: 600;
+  color: var(--green-dark);
+  max-width: 620px;
+  margin-bottom: 1.4rem;
+  text-wrap: balance;
+}
+
+.hero__title span {
+  color: var(--green);
+  white-space: nowrap;
+}
+
+.hero__lead {
+  max-width: 520px;
+  font-size: 1.1rem;
+  color: var(--muted);
+  margin-bottom: 2rem;
+  text-wrap: pretty;
+}
+
+/* Story */
+.story__media img,
+.about__logo img {
+  height: auto;
+}
+
+/* The artwork has a white matte; let it melt into the section gradient. */
+.story__media img {
+  mix-blend-mode: multiply;
+}
+
+.story {
+  background: linear-gradient(180deg, #fff 0%, var(--mint) 100%);
+}
+
+.story__grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 56px;
+  align-items: center;
+}
+
+.story__body p {
+  color: var(--muted);
+}
+
+.story__quote {
+  margin: 1.6rem 0 0;
+  padding: 1.2rem 1.4rem;
+  border-left: 4px solid var(--sun);
+  background: #fff;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-style: italic;
+  font-weight: 400;
+  color: var(--green-dark);
+  box-shadow: var(--shadow);
+}
+
+/* Product banner */
+.product {
+  background: linear-gradient(135deg, var(--green-dark), var(--green-mid) 60%, var(--green));
+  color: #fff;
+  padding: 88px 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.product::before,
+.product::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.product::before {
+  width: 420px;
+  height: 420px;
+  top: -180px;
+  left: -120px;
+}
+
+.product::after {
+  width: 300px;
+  height: 300px;
+  bottom: -140px;
+  right: -60px;
+}
+
+.product__inner {
+  position: relative;
+  max-width: 760px;
+}
+
+.product__icon {
+  display: flex;
+  width: max-content;
+  margin-inline: auto;
+  padding: 14px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  margin-bottom: 1rem;
+}
+
+.product__title {
+  font-size: clamp(2rem, 4.5vw, 3.2rem);
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.product__lead {
+  font-size: 1.1rem;
+  opacity: 0.9;
+}
+
+/* Team */
+.team__frame {
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  margin-top: 1rem;
+}
+
+/* About */
+.about__grid {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 56px;
+  align-items: center;
+}
+
+.about__logo {
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, #fff 0%, var(--mint) 70%);
+  display: grid;
+  place-items: center;
+  padding: 12%;
+  box-shadow: var(--shadow);
+}
+
+.about__grid > div > p {
+  color: var(--muted);
+}
+
+.features {
+  display: grid;
+  gap: 18px;
+  margin-top: 1.6rem;
+}
+
+.feature {
+  display: flex;
+  gap: 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.feature:hover {
+  border-color: var(--green);
+  box-shadow: var(--shadow);
+}
+
+.feature__no {
+  flex: none;
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: var(--green);
+  color: #fff;
+  font-weight: 600;
+  font-size: 1.3rem;
+}
+
+.feature__title {
+  font-size: 1.2rem;
+  color: var(--green-dark);
+  margin-bottom: 0.4rem;
+}
+
+.feature ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+}
+
+.feature li::before {
+  content: '✓';
+  color: var(--green);
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+
+/* Hero extras */
+.hero__ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 2rem;
+}
+
+.hero__chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: 560px;
+}
+
+.hero__chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--line);
+  color: var(--green-dark);
+  font-size: 0.92rem;
+  font-weight: 400;
+  backdrop-filter: blur(6px);
+}
+
+.hero__chips svg {
+  color: var(--green);
+}
+
+/* How it works */
+.how__steps {
+  list-style: none;
+  margin: 2rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  counter-reset: step;
+}
+
+.step {
+  position: relative;
+  padding: 32px 26px 26px;
+  border-radius: var(--radius);
+  background: #fff;
+  border: 1px solid var(--line);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.step:hover {
+  border-color: var(--green-brand);
+  box-shadow: var(--shadow);
+}
+
+.step__no {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 1rem;
+  border-radius: 14px;
+  background: var(--sun-soft);
+  color: var(--sun);
+  font-weight: 600;
+  font-size: 1.3rem;
+}
+
+.step h3 {
+  font-size: 1.15rem;
+  color: var(--green-dark);
+  margin-bottom: 0.5rem;
+}
+
+.step p {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* Product CTA */
+.btn--light {
+  background: #fff;
+  color: var(--green-dark);
+  margin-top: 0.8rem;
+}
+
+.btn--light:hover {
+  background: var(--mint);
+}
+
+.product .btn--light:focus-visible {
+  box-shadow: 0 0 0 3px var(--green-dark), 0 0 0 5px #fff;
+}
+
+/* Team roster */
+.team__frame {
+  margin: 1rem 0 0;
+}
+
+.team__frame img {
+  width: 100%;
+  height: auto;
+}
+
+/* On desktop the photo itself is legible, so the roster is for screen readers only. */
+@media (min-width: 861px) {
+  .team__list {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+}
+
+.team__list {
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.member {
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: var(--mint);
+}
+
+.member__role {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+.member h3 {
+  font-size: 1.1rem;
+  color: var(--green-dark);
+  margin: 0.5rem 0 0.2rem;
+}
+
+.member p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}

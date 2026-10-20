@@ -1,0 +1,5 @@
+node_modules
+dist
+.claude-flow
+# Legacy Rust CMS (no longer built into this image)
+server

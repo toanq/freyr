@@ -8,7 +8,12 @@ services:
       - --api.insecure=true
     ports:
       - "80:80"
-      - "8080:8080" # Traefik dashboard (dev only)
+      # Dashboard is unauthenticated (--api.insecure) -- loopback only, reach it
+      # from elsewhere via `ssh -L 8080:127.0.0.1:8080 <host>`.
+      - "127.0.0.1:8080:8080"
+    environment:
+      # Read by traefik/dynamic.yml's {{ env "LANDING_DOMAIN" }} template.
+      LANDING_DOMAIN: ${LANDING_DOMAIN:-synora-landing.carcise.dev}
     volumes:
       - ./traefik/dynamic.yml:/etc/traefik/dynamic/dynamic.yml:ro
 
@@ -21,6 +26,18 @@ services:
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Database=synora;Username=synora;Password=${POSTGRES_PASSWORD:-synora_dev}"
       Avatar__StoragePath: "/data/avatars"
+      Recordings__StoragePath: "/data/recordings"
+      MicTestUploads__StoragePath: "/data/mictest"
+      Firmware__StoragePath: "/data/firmware"
+      # Public hostnames (see .env.example), e.g. synora.carcise.dev.
+      Domain__App: ${SYNORA_DOMAIN:-synora.carcise.dev}
+      Domain__Landing: ${LANDING_DOMAIN:-synora-landing.carcise.dev}
+      # Optional OTA download base URL override; empty -> https://<Domain__App>/api.
+      Firmware__PublicBaseUrl: ${FIRMWARE_PUBLIC_BASE_URL:-}
+      # Landing-site CMS (/cms/*): uploaded images, plus the one-time import
+      # source -- the former Rust CMS's SQLite DB + uploads, read-only.
+      Cms__UploadsPath: "/data/cms-uploads"
+      Cms__LegacySqlitePath: "/data/landing-legacy/synora_cms.sqlite3"
       # Any OpenAI-compatible chat-completions backend works (DeepSeek direct
       # by default; set LLM_BASE_URL/LLM_MODEL to switch, e.g. to OpenRouter:
       # LLM_BASE_URL=https://openrouter.ai/api/v1, LLM_MODEL=deepseek/deepseek-chat).
@@ -35,6 +52,13 @@ services:
       Tts__BaseUrl: http://tts:8000
     volumes:
       - ./server/data/avatars:/data/avatars
+      - ./server/data/recordings:/data/recordings
+      - ./server/data/mictest:/data/mictest
+      - ./server/data/firmware:/data/firmware
+      - ./server/data/cms-uploads:/data/cms-uploads
+      # Former landing CMS data volume, only read by the startup import
+      # (no-op once the CMS tables have rows). Safe to drop after migrating.
+      - synora-landing-api-data:/data/landing-legacy:ro
     depends_on:
       - postgres
       - mosquitto
@@ -67,7 +91,13 @@ services:
       # CDN-egress issue as asr/model-src).
       HF_HUB_CACHE: /hf-cache
     volumes:
-      - ./tts/vieneu-hf-cache:/hf-cache:ro
+      # NOT :ro (unlike asr/model-src above) -- huggingface_hub writes lock
+      # files and cache-index metadata into HF_HUB_CACHE even when the model
+      # is already fully downloaded. Read-only here made the container
+      # crash on every startup: "OSError: [Errno 30] Read-only file system:
+      # '/hf-cache/models--pnnbao-ump--VieNeu-TTS-v3-...'" (confirmed live,
+      # container down since boot until this fix).
+      - ./tts/vieneu-hf-cache:/hf-cache
 
   mosquitto:
     image: eclipse-mosquitto:2
@@ -106,6 +136,13 @@ services:
     depends_on:
       - server
 
+  # Static landing site (nginx). Traefik routes its /api/* and /uploads/* to
+  # the server's /cms/* endpoints (see traefik/dynamic.yml); admin login uses
+  # Synora Admin/SuperAdmin accounts.
+  landing:
+    build:
+      context: ./landing
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     # Remotely-managed tunnel (token-based) -- ingress rules (which public
@@ -114,7 +151,12 @@ services:
     # not in a local config.yml. This lets the already-installed phone app
     # (hardcoded to https://synora.carcise.dev/api, see app/lib/api_client.dart)
     # reach this locally-run stack without any app rebuild.
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    # --protocol http2 forces TCP-based edge connections instead of QUIC
+    # (cloudflared's default) -- QUIC (UDP) was dropping connIndex=3 every
+    # 20-100s in this Docker setup ("control stream encountered a failure
+    # while serving" / datagram handler context canceled), which caused the
+    # MQTT-over-WSS disconnects noted in synora_mqtt.h/test_console.cc.
+    command: tunnel --no-autoupdate --protocol http2 run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     restart: unless-stopped
     depends_on:
       - traefik
@@ -134,3 +176,4 @@ volumes:
   synora-postgres-data:
   synora-mosquitto-data:
   synora-asr-models:
+  synora-landing-api-data:

@@ -1,0 +1,96 @@
+/* Responsive */
+@media (max-width: 1024px) {
+  .header__toggle {
+    display: inline-flex;
+  }
+
+  .header__nav {
+    position: absolute;
+    top: var(--header-h);
+    left: 16px;
+    right: 16px;
+    flex-direction: column;
+    gap: 0;
+    background: #fff;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.3s ease;
+  }
+
+  .header__nav.is-open {
+    max-height: 400px;
+  }
+
+  .header__nav a {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .header__nav a::after {
+    display: none;
+  }
+
+  .footer__grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .section {
+    padding: 72px 0;
+  }
+
+  .hero {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(255, 255, 255, 0.8) 100%),
+      url('/img/hero-room.webp') 70% center / cover no-repeat;
+  }
+
+  .how__steps,
+  .team__list {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .story__grid,
+  .about__grid,
+  .contact__grid {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+
+  .about__logo {
+    max-width: 300px;
+    margin: 0 auto;
+  }
+
+  .news__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .header__logo img {
+    height: 46px;
+  }
+
+  .header__actions .btn {
+    padding: 0.55rem 1rem;
+  }
+
+  .form-row,
+  .footer__grid,
+  .how__steps,
+  .team__list {
+    grid-template-columns: 1fr;
+  }
+
+  .contact__form {
+    padding: 24px;
+  }
+
+  .hero__ctas .btn {
+    width: 100%;
+  }
+}

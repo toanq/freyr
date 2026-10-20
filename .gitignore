@@ -8,3 +8,13 @@ tts/vieneu-hf-cache/
 
 # Captured ESP32 serial output from scripts/monitor_esp32.sh
 logs/
+
+# Server runtime data (bind-mounted in docker-compose.yml). avatars/ stays tracked.
+server/data/recordings/
+server/data/mictest/
+server/data/firmware/
+server/data/cms-uploads/
+
+# Python bytecode, FreeCAD auto-backups
+__pycache__/
+*.FCBak

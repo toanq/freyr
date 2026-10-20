@@ -1,0 +1,14 @@
+{
+  "id": "session-1791787192882",
+  "startedAt": "2026-10-12T06:39:52.882Z",
+  "cwd": "/home/toan/bench/toan/synora/landing",
+  "context": {},
+  "metrics": {
+    "edits": 1,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "endedAt": "2026-10-12T11:06:26.050Z",
+  "duration": 15993169
+}

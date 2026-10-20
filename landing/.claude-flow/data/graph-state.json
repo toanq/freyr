@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "updatedAt": 1791803186038,
+  "nodeCount": 8,
+  "contentFingerprint": "dc66900c_7ce3519b_361",
+  "nodes": {
+    "mem_mv4vtyes_4y9cqyvm": {
+      "id": "mem_mv4vtyes_4y9cqyvm",
+      "category": "auto-memory",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1791787192948
+    },
+    "mem_mv4vtyeu_a9073hr2": {
+      "id": "mem_mv4vtyeu_a9073hr2",
+      "category": "auto-memory",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1791787192950
+    },
+    "mem_mv4vtyeu_srvhwcft": {
+      "id": "mem_mv4vtyeu_srvhwcft",
+      "category": "auto-memory",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1791787192950
+    },
+    "mem_mv4vtyev_e3nun1bx": {
+      "id": "mem_mv4vtyev_e3nun1bx",
+      "category": "auto-memory",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1791787192951
+    },
+    "mem_mv4vtyev_l8bih5kd": {
+      "id": "mem_mv4vtyev_l8bih5kd",
+      "category": "auto-memory",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1791787192951
+    },
+    "mem_mv4vtyev_88sozqyz": {
+      "id": "mem_mv4vtyev_88sozqyz",
+      "category": "auto-memory",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1791787192951
+    },
+    "mem_mv4vtyew_523p3hky": {
+      "id": "mem_mv4vtyew_523p3hky",
+      "category": "auto-memory",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1791787192952
+    },
+    "mem_mv4vtyex_dmbp0ln1": {
+      "id": "mem_mv4vtyex_dmbp0ln1",
+      "category": "auto-memory",
+      "confidence": 0.5,
+      "accessCount": 0,
+      "createdAt": 1791787192953
+    }
+  },
+  "edges": [
+    {
+      "sourceId": "mem_mv4vtyev_88sozqyz",
+      "targetId": "mem_mv4vtyew_523p3hky",
+      "type": "similar",
+      "weight": 0.4535235624729788
+    }
+  ],
+  "pageRanks": {
+    "mem_mv4vtyes_4y9cqyvm": 0.11299434844726544,
+    "mem_mv4vtyeu_a9073hr2": 0.11299434844726544,
+    "mem_mv4vtyeu_srvhwcft": 0.11299434844726544,
+    "mem_mv4vtyev_e3nun1bx": 0.11299434844726544,
+    "mem_mv4vtyev_l8bih5kd": 0.11299434844726544,
+    "mem_mv4vtyev_88sozqyz": 0.11299434844726544,
+    "mem_mv4vtyew_523p3hky": 0.209039560869142,
+    "mem_mv4vtyex_dmbp0ln1": 0.11299434844726544
+  }
+}

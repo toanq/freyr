@@ -14,6 +14,32 @@ http:
         - web
       service: mqtt
       priority: 10
+    # Landing site: nginx serves only the static build; its API and uploaded
+    # images are the Synora server's /cms/* endpoints, routed here.
+    # LANDING_DOMAIN comes from the traefik service env (docker-compose.yml),
+    # e.g. synora-landing.carcise.dev.
+    landing-api:
+      rule: "Host(`{{ env "LANDING_DOMAIN" }}`) && PathPrefix(`/api/`)"
+      entryPoints:
+        - web
+      service: api
+      priority: 30
+      middlewares:
+        - landing-api-to-cms
+    landing-uploads:
+      rule: "Host(`{{ env "LANDING_DOMAIN" }}`) && PathPrefix(`/uploads/`)"
+      entryPoints:
+        - web
+      service: api
+      priority: 30
+      middlewares:
+        - cms-prefix
+    landing:
+      rule: "Host(`{{ env "LANDING_DOMAIN" }}`)"
+      entryPoints:
+        - web
+      service: landing
+      priority: 20
     web:
       rule: "PathPrefix(`/`)"
       entryPoints:
@@ -26,6 +52,15 @@ http:
       stripPrefix:
         prefixes:
           - /api
+    # /api/<path> -> /cms/<path>
+    landing-api-to-cms:
+      replacePathRegex:
+        regex: "^/api/(.*)"
+        replacement: "/cms/$1"
+    # /uploads/<file> -> /cms/uploads/<file>
+    cms-prefix:
+      addPrefix:
+        prefix: /cms
 
   services:
     api:
@@ -40,6 +75,10 @@ http:
       loadBalancer:
         servers:
           - url: "http://mosquitto:9001"
+    landing:
+      loadBalancer:
+        servers:
+          - url: "http://landing:80"
     web:
       loadBalancer:
         servers:

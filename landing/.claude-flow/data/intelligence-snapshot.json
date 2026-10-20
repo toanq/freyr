@@ -1,0 +1,95 @@
+[
+  {
+    "timestamp": 1791781292819,
+    "nodes": 0,
+    "edges": 0,
+    "pageRankSum": 0,
+    "confidences": [],
+    "accessCounts": [],
+    "topPatterns": []
+  },
+  {
+    "timestamp": 1791803186049,
+    "nodes": 8,
+    "edges": 1,
+    "pageRankSum": 1,
+    "confidences": [
+      0.5,
+      0.5,
+      0.5,
+      0.5,
+      0.5,
+      0.5,
+      0.5,
+      0.5
+    ],
+    "accessCounts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "topPatterns": [
+      {
+        "id": "mem_mv4vtyew_523p3hky",
+        "summary": "auto-memory:project_synora_board.md:project_synora_board",
+        "confidence": 0.5,
+        "pageRank": 0.209039560869142,
+        "accessCount": 0
+      },
+      {
+        "id": "mem_mv4vtyes_4y9cqyvm",
+        "summary": "auto-memory:MEMORY.md:(untitled)",
+        "confidence": 0.5,
+        "pageRank": 0.11299434844726544,
+        "accessCount": 0
+      },
+      {
+        "id": "mem_mv4vtyeu_a9073hr2",
+        "summary": "auto-memory:feedback_docker_network_egress.md:docker-network",
+        "confidence": 0.5,
+        "pageRank": 0.11299434844726544,
+        "accessCount": 0
+      },
+      {
+        "id": "mem_mv4vtyeu_srvhwcft",
+        "summary": "auto-memory:feedback_esp_idf_target_reset.md:feedback_esp_id",
+        "confidence": 0.5,
+        "pageRank": 0.11299434844726544,
+        "accessCount": 0
+      },
+      {
+        "id": "mem_mv4vtyev_e3nun1bx",
+        "summary": "auto-memory:feedback_flutter_build_clean.md:feedback-flutter",
+        "confidence": 0.5,
+        "pageRank": 0.11299434844726544,
+        "accessCount": 0
+      },
+      {
+        "id": "mem_mv4vtyev_l8bih5kd",
+        "summary": "auto-memory:project_ble_always_on.md:project_ble_always_on",
+        "confidence": 0.5,
+        "pageRank": 0.11299434844726544,
+        "accessCount": 0
+      },
+      {
+        "id": "mem_mv4vtyev_88sozqyz",
+        "summary": "auto-memory:project_firmware_greenfield.md:project_firmware_",
+        "confidence": 0.5,
+        "pageRank": 0.11299434844726544,
+        "accessCount": 0
+      },
+      {
+        "id": "mem_mv4vtyex_dmbp0ln1",
+        "summary": "auto-memory:project_vad_playback_test_app.md:project_vad_pla",
+        "confidence": 0.5,
+        "pageRank": 0.11299434844726544,
+        "accessCount": 0
+      }
+    ]
+  }
+]

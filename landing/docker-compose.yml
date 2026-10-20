@@ -1,0 +1,59 @@
+# LEGACY -- no longer runnable on its own. The landing CMS API (formerly the
+# Rust service in landing/server, started inside this image) now lives in the
+# Synora .NET server under /cms, and landing/nginx.conf proxies /api/* and
+# /uploads/* to `server:8080`, which only exists in the root
+# docker-compose.yml. Deploy the landing site from there. Kept for reference.
+#
+# Standalone landing stack: Traefik terminates TLS (Let's Encrypt via ACME
+# HTTP-01) and routes to the nginx-served Vite build.
+#
+# Required env (shell or landing/.env):
+#   ACME_EMAIL      - Let's Encrypt account email
+#   LANDING_DOMAIN  - public hostname, DNS A/AAAA must point at this host
+#
+# Ports 80/443 must be reachable from the internet for HTTP-01 to succeed.
+services:
+  traefik:
+    image: traefik:v3.5
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?set ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      # Uncomment to test against LE staging first (avoids rate limits):
+      # - --certificatesresolvers.le.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    restart: unless-stopped
+
+  landing:
+    build:
+      context: .
+    environment:
+      CORS_ORIGIN: https://${LANDING_DOMAIN:-synora-landing.carcise.dev}
+      ADMIN_USERNAME: ${CMS_ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${CMS_ADMIN_PASSWORD:?set CMS_ADMIN_PASSWORD}
+      SECURE_COOKIES: "true"
+    volumes:
+      - landing-api-data:/app/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.landing.rule=Host(`${LANDING_DOMAIN:-synora-landing.carcise.dev}`)
+      - traefik.http.routers.landing.entrypoints=websecure
+      - traefik.http.routers.landing.tls.certresolver=le
+      - traefik.http.services.landing.loadbalancer.server.port=80
+    restart: unless-stopped
+
+volumes:
+  letsencrypt:
+  landing-api-data:
