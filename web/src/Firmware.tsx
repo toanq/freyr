@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { apiFetch, API_URL } from './api'
 import './Firmware.css'
+import BleFirmwareUpdate from './ble/BleFirmwareUpdate'
 
 // esptool-js is ~175 kB; only admins opening this tab should download it.
 const UsbFlash = lazy(() => import('./UsbFlash'))
@@ -62,6 +63,7 @@ function Firmware() {
       <Suspense fallback={<div className="card fw-usb"><p className="form-hint">Loading USB flasher…</p></div>}>
         <UsbFlash builds={builds ?? []} />
       </Suspense>
+      <BleFirmwareUpdate builds={builds ?? []} />
       <DevicePanel builds={builds ?? []} devices={devices} onRefresh={loadDevices} />
     </section>
   )

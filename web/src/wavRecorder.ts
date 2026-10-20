@@ -17,7 +17,13 @@ export type WavRecorder = {
 
 const TARGET_SAMPLE_RATE = 16000
 
-export async function startWavRecording(): Promise<WavRecorder> {
+export type WavRecordingOptions = {
+  // Called once per captured buffer (~85 ms at 48 kHz) with its RMS level in
+  // dBFS -- the assistant talk panel uses it for silence detection.
+  onLevel?: (dbfs: number) => void
+}
+
+export async function startWavRecording(options: WavRecordingOptions = {}): Promise<WavRecorder> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } })
   const audioContext = new AudioContext()
   const source = audioContext.createMediaStreamSource(stream)
@@ -25,7 +31,14 @@ export async function startWavRecording(): Promise<WavRecorder> {
   const chunks: Float32Array[] = []
 
   processor.onaudioprocess = (e) => {
-    chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)))
+    const data = e.inputBuffer.getChannelData(0)
+    chunks.push(new Float32Array(data))
+    if (options.onLevel) {
+      let sum = 0
+      for (let i = 0; i < data.length; i++) sum += data[i] * data[i]
+      const rms = Math.sqrt(sum / data.length)
+      options.onLevel(rms > 0 ? 20 * Math.log10(rms) : -100)
+    }
   }
   source.connect(processor)
   processor.connect(audioContext.destination)

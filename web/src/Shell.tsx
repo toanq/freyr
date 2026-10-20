@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { apiFetch } from './api'
+import { forgetPushOnSignOut, refreshPushToken } from './push/pushClient'
 import Dashboard from './Dashboard'
 import Users from './Users'
 import Devices from './Devices'
@@ -10,6 +11,8 @@ import MicTestUploads from './MicTestUploads'
 import Firmware from './Firmware'
 import { useI18n, type StringKey } from './i18n'
 import { LanguageToggle } from './I18nProvider'
+import AppBarAvatar from './account/AppBarAvatar'
+import Profile from './account/Profile'
 
 type Session = { username: string; role: string }
 type View =
@@ -21,12 +24,19 @@ type View =
   | 'system-config'
   | 'duplicate-devices'
   | 'mictest-uploads'
+  | 'profile'
 
 function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => void }) {
   const [view, setView] = useState<View>('devices')
   const { t } = useI18n()
 
+  useEffect(() => {
+    void refreshPushToken()
+  }, [])
+
   const handleLogout = async () => {
+    // While still signed in, so the DELETE is authorized.
+    await forgetPushOnSignOut()
     await apiFetch('/auth/logout', { method: 'POST' })
     onLoggedOut()
   }
@@ -51,12 +61,7 @@ function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => 
       <header className="app-bar">
         <img className="app-bar-logo" src="/logo-green.jpg" alt="" />
         <span className="app-bar-title">Synora</span>
-        <span className="app-bar-user" title={session.role}>
-          <span className="app-bar-avatar" aria-hidden="true">
-            {session.username.charAt(0).toUpperCase()}
-          </span>
-          <span className="app-bar-username">{session.username}</span>
-        </span>
+        <AppBarAvatar username={session.username} role={session.role} onOpen={() => setView('profile')} />
         <LanguageToggle />
         <button type="button" className="app-bar-signout" onClick={handleLogout}>
           {t('shell.signOut')}
@@ -86,6 +91,7 @@ function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => 
         {view === 'duplicate-devices' && isAdmin && <DuplicateDevices />}
         {view === 'mictest-uploads' && isAdmin && <MicTestUploads />}
         {view === 'system-config' && isSuperAdmin && <SystemConfig />}
+        {view === 'profile' && <Profile onBack={() => setView('devices')} onSignOut={handleLogout} />}
       </main>
     </div>
   )

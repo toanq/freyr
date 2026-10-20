@@ -54,3 +54,42 @@ self.addEventListener('fetch', (event) => {
     ),
   )
 })
+
+// Web push (FCM). The page's Firebase SDK only subscribes; delivery is handled
+// here directly so this worker needs no Firebase SDK or config. FCM wraps the
+// message as { notification, data, fcmOptions: { link } }.
+self.addEventListener('push', (event) => {
+  let payload = {}
+  try {
+    payload = event.data ? event.data.json() : {}
+  } catch {
+    payload = { notification: { body: event.data ? event.data.text() : '' } }
+  }
+  const notification = payload.notification || {}
+  const data = payload.data || {}
+  const link =
+    (payload.fcmOptions && payload.fcmOptions.link) || (data.deviceId ? `/?device=${encodeURIComponent(data.deviceId)}` : '/')
+  event.waitUntil(
+    self.registration.showNotification(notification.title || 'Synora', {
+      body: notification.body || '',
+      icon: notification.icon || '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: data.deviceId ? `device-${data.deviceId}` : undefined,
+      data: { link },
+    }),
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = new URL((event.notification.data && event.notification.data.link) || '/', self.location.origin)
+  // Never navigate off-site, whatever the payload says.
+  const url = target.origin === self.location.origin ? target.href : self.location.origin + '/'
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+      const open = windows.find((w) => new URL(w.url).origin === self.location.origin)
+      if (open) return open.navigate(url).then((w) => (w || open).focus())
+      return self.clients.openWindow(url)
+    }),
+  )
+})

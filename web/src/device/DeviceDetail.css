@@ -1,0 +1,558 @@
+/* Per-device page (device/DeviceDetail.tsx). Reuses tokens from index.css. */
+
+.device-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.dp-topbar {
+  display: flex;
+}
+
+.dp-back {
+  background: transparent;
+  padding-left: 0.5rem;
+}
+
+.dp-notice {
+  margin: 0;
+  padding: 0.625rem 0.875rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  background: var(--chip);
+  border: 1px solid var(--border);
+}
+
+.dp-notice--success {
+  border-color: var(--good);
+  color: var(--good);
+}
+
+.dp-notice--error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Header */
+.dp-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.dp-avatar {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  background: var(--chip);
+  color: var(--good);
+  display: grid;
+  place-items: center;
+  overflow: visible;
+}
+
+.dp-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.dp-avatar-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.75rem;
+}
+
+.dp-avatar .device-online-dot {
+  right: 12px;
+  top: 6px;
+  bottom: auto;
+  width: 16px;
+  height: 16px;
+}
+
+.dp-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.dp-title {
+  overflow-wrap: anywhere;
+}
+
+.dp-status-line {
+  font-size: 0.875rem;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.dp-sep {
+  color: var(--faint);
+}
+
+.dp-muted-text {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.dp-tone-good {
+  color: var(--good);
+}
+
+.dp-tone-low {
+  color: var(--low);
+}
+
+.dp-tone-high {
+  color: var(--high);
+}
+
+.dp-tone-none {
+  color: var(--faint);
+}
+
+.dp-header-actions,
+.dp-action-row,
+.dp-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.dp-header-actions button,
+.dp-action-row button {
+  min-height: 36px;
+  padding: 0 0.875rem;
+  font-size: 0.8125rem;
+}
+
+/* Quick actions */
+.dp-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.dp-water-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.dp-water-seconds {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dp-water-seconds input {
+  width: 100%;
+}
+
+.dp-water-btn {
+  flex: none;
+  min-height: 44px;
+  background: var(--high) !important;
+  border-color: var(--high) !important;
+}
+
+.dp-action-row button {
+  flex: 1 1 0;
+}
+
+.dp-toggle-on {
+  border-color: var(--low);
+  color: var(--low);
+}
+
+.dp-talk-btn {
+  width: 100%;
+  min-height: 46px;
+  font-size: 0.9375rem;
+}
+
+/* Metrics */
+.dp-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dp-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.dp-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border-left: 3px solid var(--good);
+}
+
+.dp-metric--warning {
+  background: rgba(255, 193, 7, 0.18);
+  outline: 1.5px solid var(--warn);
+}
+
+.dp-metric-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.dp-warning-icon {
+  color: var(--warn);
+  margin-left: 0.35rem;
+}
+
+.dp-metric-value {
+  font-size: 1.375rem;
+  font-weight: 700;
+}
+
+.dp-metric-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.dp-suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dp-suggestion p {
+  color: var(--muted);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+@media (min-width: 600px) {
+  .dp-metric-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Sections, chips, forms */
+.dp-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dp-section-head button {
+  min-height: 34px;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.dp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.dp-chip {
+  min-height: 32px;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+  background: transparent;
+  color: var(--muted);
+}
+
+.dp-chip--active,
+.dp-chip--active:hover:not(:disabled) {
+  background: var(--good);
+  border-color: var(--good);
+  color: #0e2418;
+}
+
+.dp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.dp-field-label {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.dp-percent {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.dp-percent input {
+  width: 6rem;
+}
+
+.dp-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.dp-form-row input[type='time'] {
+  flex: 1 1 8rem;
+}
+
+.dp-inline-number {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.dp-inline-number input {
+  width: 5.5rem;
+}
+
+.dp-form-actions {
+  justify-content: flex-end;
+}
+
+/* Schedules */
+.dp-schedules,
+.dp-schedule-form,
+.dp-alerts-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.dp-schedule-form {
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.dp-schedule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dp-schedule {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.dp-schedule:first-child {
+  border-top: none;
+}
+
+.dp-schedule--off .dp-schedule-time {
+  color: var(--faint);
+}
+
+.dp-schedule-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  background: transparent;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+  justify-content: flex-start;
+}
+
+.dp-schedule-time {
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.dp-icon-btn {
+  min-height: 34px;
+  width: 34px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  flex: none;
+}
+
+/* Toggle switch */
+.dp-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 26px;
+  flex: none;
+}
+
+.dp-switch input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.dp-switch span {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background 0.15s;
+  pointer-events: none;
+}
+
+.dp-switch span::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.dp-switch input:checked + span {
+  background: var(--good);
+}
+
+.dp-switch input:checked + span::after {
+  transform: translateX(18px);
+}
+
+.dp-switch input:focus-visible + span {
+  outline: 2px solid var(--good);
+  outline-offset: 2px;
+}
+
+/* Low water alerts */
+.dp-alerts-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 0;
+  padding: 1rem;
+  border-radius: var(--radius);
+  border: none;
+  text-align: left;
+  white-space: normal;
+  font-weight: 400;
+}
+
+.dp-alerts-summary > span:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+/* Assistant talk */
+.dp-talk {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.dp-talk .dp-section-head {
+  width: 100%;
+}
+
+.dp-talk-ball {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #0e2418;
+  background: var(--good);
+  transition: transform 0.12s ease-out;
+}
+
+.dp-talk-ball--idle {
+  background: var(--chip);
+  color: var(--good);
+}
+
+.dp-talk-ball--processing {
+  animation: dp-pulse 1s ease-in-out infinite;
+}
+
+.dp-talk-ball--speaking {
+  background: var(--high);
+}
+
+@keyframes dp-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.dp-talk-state {
+  font-weight: 600;
+}
+
+.dp-talk-log {
+  width: 100%;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* List-card avatar doubles as the link into this page (Devices.tsx). */
+.device-avatar-link {
+  padding: 0;
+  min-height: 0;
+  border: none;
+  cursor: pointer;
+}

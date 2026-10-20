@@ -1,0 +1,232 @@
+/* Web Bluetooth pairing wizard + BLE firmware push (web/src/ble/). */
+
+.ble-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  padding: env(safe-area-inset-top) 0 0;
+}
+
+.ble-sheet {
+  width: 100%;
+  max-width: 32rem;
+  max-height: calc(100svh - env(safe-area-inset-top) - 2rem);
+  overflow-y: auto;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (min-width: 600px) {
+  .ble-overlay {
+    align-items: center;
+  }
+
+  .ble-sheet {
+    border-radius: var(--radius);
+  }
+}
+
+.ble-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ble-close {
+  min-height: 36px;
+  width: 36px;
+  padding: 0;
+  flex: none;
+}
+
+.ble-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.875rem;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.ble-center p {
+  white-space: pre-line;
+}
+
+.ble-unsupported {
+  color: var(--low);
+  font-size: 0.9rem;
+}
+
+.ble-error {
+  color: var(--low);
+}
+
+.ble-check {
+  display: inline-grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--good);
+  color: #0e2418;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.ble-spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--good);
+  animation: ble-spin 0.9s linear infinite;
+}
+
+.ble-spinner--small {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+
+@keyframes ble-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ble-wifi-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.ble-ssid-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.ble-ssid-row input {
+  flex: 1 1 auto;
+}
+
+.ble-ssid-row button {
+  flex: none;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 1.1rem;
+}
+
+.ble-show-password {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.ble-show-password input {
+  min-height: auto;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--good);
+}
+
+.ble-networks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.ble-network {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-weight: 500;
+  text-align: left;
+}
+
+.ble-network--selected {
+  border-color: var(--good);
+  background: rgba(111, 207, 151, 0.15);
+}
+
+.ble-network-ssid {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ble-network-rssi {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.ble-ota {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.ble-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.ble-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--chip);
+  overflow: hidden;
+}
+
+.ble-progress-fill {
+  height: 100%;
+  background: var(--good);
+  transition: width 0.2s;
+}
+
+.ble-progress-fill--indeterminate {
+  width: 35%;
+  animation: ble-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes ble-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.ble-pair-button {
+  margin-left: auto;
+  min-height: 36px;
+  padding: 0 0.875rem;
+  font-size: 0.8125rem;
+}
+
+.page-header:has(.ble-pair-button) {
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
+}

@@ -131,6 +131,15 @@ services:
       context: ./web
       args:
         VITE_API_URL: /api
+        # Baked into the build (see .env.example); empty hides the button.
+        VITE_GOOGLE_CLIENT_ID: ${OAuth__Google__WebClientId:-}
+        VITE_FACEBOOK_APP_ID: ${OAuth__Facebook__AppId:-}
+        # Web push (see .env.example); any empty value hides the opt-in.
+        VITE_FIREBASE_API_KEY: ${FIREBASE_WEB_API_KEY:-}
+        VITE_FIREBASE_PROJECT_ID: ${FIREBASE_WEB_PROJECT_ID:-}
+        VITE_FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_WEB_MESSAGING_SENDER_ID:-}
+        VITE_FIREBASE_APP_ID: ${FIREBASE_WEB_APP_ID:-}
+        VITE_FIREBASE_VAPID_KEY: ${FIREBASE_WEB_VAPID_KEY:-}
     volumes:
       - ./web/downloads:/usr/share/nginx/html/downloads
     depends_on:

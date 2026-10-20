@@ -2,8 +2,13 @@ import { useState } from 'react'
 import { apiFetch } from './api'
 import { useI18n } from './i18n'
 import { LanguageToggle } from './I18nProvider'
+import RegisterForm, { RememberMe } from './account/RegisterForm'
+import SocialLogin from './account/SocialLogin'
+import './account/account.css'
 
 function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
+  const [registering, setRegistering] = useState(false)
+  const [rememberMe, setRememberMe] = useState(true)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -19,7 +24,7 @@ function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
       const res = await apiFetch('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, rememberMe }),
       })
 
       if (res.ok) {
@@ -48,6 +53,9 @@ function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
       <img className="login-logo" src="/logo-green.jpg" alt="" />
       <h1>Synora</h1>
       <p className="login-subtitle">{t('login.subtitle')}</p>
+      {registering ? (
+        <RegisterForm onRegistered={onLoggedIn} />
+      ) : (
       <form className="card" onSubmit={handleSubmit}>
         <label>
           {t('login.username')}
@@ -68,11 +76,17 @@ function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
             required
           />
         </label>
+        <RememberMe checked={rememberMe} onChange={setRememberMe} />
         <button type="submit" disabled={submitting}>
           {submitting ? t('login.submitting') : t('login.submit')}
         </button>
         {error && <p className="login-error">{error}</p>}
       </form>
+      )}
+      <button type="button" className="login-switch" onClick={() => setRegistering(!registering)}>
+        {registering ? t('account.toLogin') : t('account.toRegister')}
+      </button>
+      <SocialLogin onLoggedIn={onLoggedIn} />
     </main>
   )
 }

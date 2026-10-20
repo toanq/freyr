@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { apiFetch } from './api'
 import { useI18n } from './i18n'
+import DeviceDetail from './device/DeviceDetail'
+import { useDeviceRoute } from './device/deviceRoute'
+import BlePairing from './ble/BlePairing'
 
 type Reading = {
   temperatureCelsius: number | null
@@ -34,6 +37,7 @@ export type Discussion = {
 function Devices({ isAdmin }: { isAdmin: boolean }) {
   const [devices, setDevices] = useState<DeviceRow[]>([])
   const [activationCode, setActivationCode] = useState('')
+  const [blePairing, setBlePairing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
@@ -51,6 +55,7 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
   const [discussions, setDiscussions] = useState<Discussion[]>([])
   const [discussionsError, setDiscussionsError] = useState<string | null>(null)
   const { t, formatDate } = useI18n()
+  const [detailId, openDetail, closeDetail] = useDeviceRoute()
 
   const load = () => {
     apiFetch('/devices')
@@ -184,12 +189,24 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
     }
   }
 
+  if (detailId) {
+    const leave = () => {
+      closeDetail()
+      load()
+    }
+    return <DeviceDetail deviceId={detailId} isAdmin={isAdmin} onBack={leave} onDeleted={leave} />
+  }
+
   return (
     <section className="devices">
       <div className="page-header">
         <h2>{isAdmin ? t('devices.all') : t('devices.mine')}</h2>
         <span className="page-count">{devices.length}</span>
+        <button type="button" className="btn-primary ble-pair-button" onClick={() => setBlePairing(true)}>
+          {t('ble.pairButton')}
+        </button>
       </div>
+      {blePairing && <BlePairing onClose={() => setBlePairing(false)} onPaired={load} />}
       {isAdmin && (
         <form className="inline-form card" onSubmit={handlePair}>
           <input
@@ -213,10 +230,16 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
         {devices.map((d) => (
           <li key={d.id} className="card device-card">
             <div className="device-header">
-              <span className="device-avatar" aria-hidden="true">
+              <button
+                type="button"
+                className="device-avatar device-avatar-link"
+                onClick={() => openDetail(d.id)}
+                aria-label={`${t('dp.details')}: ${d.name}`}
+                title={t('dp.details')}
+              >
                 <LeafIcon />
                 <span className={`device-online-dot ${d.isOnline ? 'online' : 'offline'}`} />
-              </span>
+              </button>
               <input
                 className="device-name"
                 aria-label={t('devices.nameLabel')}
@@ -240,6 +263,9 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
             </div>
             <Telemetry reading={d.latestReading} />
             <div className="device-actions">
+              <button type="button" className="btn-primary" onClick={() => openDetail(d.id)}>
+                {t('dp.details')}
+              </button>
               <button type="button" onClick={() => toggleDiscussions(d.id)}>
                 {discussionsDeviceId === d.id ? t('devices.hideConversations') : t('devices.conversations')}
               </button>
