@@ -1,0 +1,220 @@
+.firmware .card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fw-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--chip);
+  overflow: hidden;
+}
+
+.fw-progress > div {
+  height: 100%;
+  background: var(--good);
+  transition: width 0.2s;
+}
+
+.fw-refresh {
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.fw-build-list,
+.fw-device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fw-build,
+.fw-device {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.fw-build:first-child,
+.fw-device:first-child {
+  border-top: none;
+  padding-top: 0.25rem;
+}
+
+.fw-build-main,
+.fw-device-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.fw-version {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.fw-latest {
+  color: var(--good);
+}
+
+.fw-kit {
+  color: var(--high);
+}
+
+/* ---------- USB flashing ---------- */
+
+.fw-usb select {
+  width: 100%;
+}
+
+.fw-usb-modes {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fw-usb-modes label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fw-usb-modes input {
+  min-height: auto;
+  width: 18px;
+  height: 18px;
+  margin: 0.1rem 0 0;
+  accent-color: var(--good);
+  flex: none;
+}
+
+.fw-usb-modes strong {
+  color: var(--text);
+}
+
+.fw-usb-modes input:disabled + span {
+  opacity: 0.5;
+}
+
+.fw-usb-erase {
+  margin-left: 1.75rem;
+  color: var(--low) !important;
+}
+
+.fw-usb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.fw-usb-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.fw-usb-log summary {
+  cursor: pointer;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.fw-usb-log pre {
+  margin: 0.5rem 0 0;
+  max-height: 16rem;
+  overflow: auto;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.fw-delete {
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.fw-sha {
+  min-height: 24px;
+  padding: 0 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  background: transparent;
+  color: var(--muted);
+}
+
+.fw-notes {
+  font-size: 0.875rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.fw-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.fw-dot.online {
+  background: var(--good);
+}
+
+.fw-device-name {
+  font-weight: 700;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fw-running {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.fw-device-actions select {
+  flex: 1 1 8rem;
+}
+
+.fw-device-actions button {
+  min-height: 44px;
+}
+
+.fw-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fw-bulk button {
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
+  padding: 0.5rem 1rem;
+}

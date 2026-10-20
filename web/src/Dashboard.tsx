@@ -22,12 +22,14 @@ function Dashboard() {
   return (
     <section className="dashboard">
       <h2>Server status</h2>
-      <p>Server: {API_URL}</p>
-      <p className={`health health--${health.status}`}>
-        {health.status === 'loading' && 'Checking server…'}
-        {health.status === 'ok' && 'Server is up'}
-        {health.status === 'error' && `Server unreachable (${health.message})`}
-      </p>
+      <div className="card status-card">
+        <p className={`health health--${health.status}`}>
+          {health.status === 'loading' && 'Checking server…'}
+          {health.status === 'ok' && 'Server is up'}
+          {health.status === 'error' && `Server unreachable (${health.message})`}
+        </p>
+        <p className="form-hint">{API_URL}</p>
+      </div>
     </section>
   )
 }

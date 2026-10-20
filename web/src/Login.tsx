@@ -39,8 +39,10 @@ function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
 
   return (
     <main className="login">
+      <img className="login-logo" src="/logo-green.jpg" alt="" />
       <h1>Synora</h1>
-      <form onSubmit={handleSubmit}>
+      <p className="login-subtitle">Sign in to manage your plants</p>
+      <form className="card" onSubmit={handleSubmit}>
         <label>
           Username
           <input

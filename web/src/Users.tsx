@@ -112,7 +112,7 @@ function Users() {
   return (
     <section className="users">
       <h2>Users</h2>
-      <form onSubmit={handleCreate}>
+      <form className="inline-form card" onSubmit={handleCreate}>
         <input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} required />
         <input
           type="password"
@@ -128,6 +128,7 @@ function Users() {
         <button type="submit">Create</button>
       </form>
       {error && <p className="form-error">{error}</p>}
+      <div className="table-scroll card">
       <table>
         <thead>
           <tr>
@@ -165,7 +166,7 @@ function Users() {
               {resettingUserId === u.id && (
                 <tr key={`${u.id}-reset`}>
                   <td colSpan={6}>
-                    <form onSubmit={(e) => handleResetPassword(e, u.id)}>
+                    <form className="inline-form" onSubmit={(e) => handleResetPassword(e, u.id)}>
                       <input
                         type="password"
                         placeholder="New password"
@@ -186,7 +187,7 @@ function Users() {
               {notifyingUserId === u.id && (
                 <tr key={`${u.id}-notify`}>
                   <td colSpan={6}>
-                    <form onSubmit={(e) => handleSendNotification(e, u.id)}>
+                    <form className="inline-form" onSubmit={(e) => handleSendNotification(e, u.id)}>
                       <input
                         placeholder="Title"
                         value={notifyTitle}
@@ -212,6 +213,7 @@ function Users() {
           ))}
         </tbody>
       </table>
+      </div>
     </section>
   )
 }

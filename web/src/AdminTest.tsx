@@ -351,7 +351,7 @@ function ChatTest({ deviceId }: { deviceId: string }) {
       {reply && <p className="admin-test-result admin-test-result--success">Assistant: "{reply}"</p>}
 
       <h4>Chat history</h4>
-      <Discussions discussions={discussions} error={discussionsError} />
+      <Discussions deviceId={deviceId} discussions={discussions} error={discussionsError} />
     </div>
   )
 }
