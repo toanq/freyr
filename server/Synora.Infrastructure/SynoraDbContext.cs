@@ -15,6 +15,7 @@ public class SynoraDbContext(DbContextOptions<SynoraDbContext> options) : DbCont
     public DbSet<FirmwareBuild> FirmwareBuilds => Set<FirmwareBuild>();
     public DbSet<CmsPost> CmsPosts => Set<CmsPost>();
     public DbSet<CmsOrder> CmsOrders => Set<CmsOrder>();
+    public DbSet<UserPushToken> PushTokens => Set<UserPushToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -22,6 +23,17 @@ public class SynoraDbContext(DbContextOptions<SynoraDbContext> options) : DbCont
         {
             entity.HasIndex(u => u.Username).IsUnique();
             entity.Property(u => u.Role).HasConversion<string>();
+        });
+
+        modelBuilder.Entity<UserPushToken>(entity =>
+        {
+            entity.HasIndex(t => t.Token).IsUnique();
+            entity.HasIndex(t => t.UserId);
+            entity.Property(t => t.Platform).HasMaxLength(16);
+            entity.HasOne(t => t.User)
+                  .WithMany()
+                  .HasForeignKey(t => t.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Device>(entity =>

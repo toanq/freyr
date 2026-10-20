@@ -1,7 +1,6 @@
-using FirebaseAdmin.Messaging;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Synora.Core;
+using Synora.Infrastructure;
 
 namespace Synora.Api.Services;
 
@@ -14,11 +13,9 @@ namespace Synora.Api.Services;
 /// sends a push (LowWaterWarningThresholdPercent is in-app-only, checked
 /// client-side against the latest reading).
 /// </summary>
-public sealed class LowWaterAlertService(IConfiguration configuration, ILogger<LowWaterAlertService> logger)
+public sealed class LowWaterAlertService(PushNotifier push, ILogger<LowWaterAlertService> logger)
 {
-    private readonly bool _firebaseConfigured = !string.IsNullOrEmpty(configuration["Firebase:ServiceAccountJson"]);
-
-    public async Task CheckLowWaterAlertAsync(Device device, double? waterLevelPercent)
+    public async Task CheckLowWaterAlertAsync(SynoraDbContext db, Device device, double? waterLevelPercent)
     {
         if (device.LowWaterCriticalThresholdPercent is not int critical || waterLevelPercent is not double level)
         {
@@ -39,23 +36,17 @@ public sealed class LowWaterAlertService(IConfiguration configuration, ILogger<L
             if (dueForAlert)
             {
                 device.LowWaterLastAlertedAt = DateTimeOffset.UtcNow;
-                if (_firebaseConfigured && !string.IsNullOrEmpty(device.Owner?.FcmToken))
+                if (push.IsConfigured && device.OwnerUserId is Guid ownerId)
                 {
-                    try
+                    var result = await push.SendToUserAsync(db, ownerId, new PushMessage(
+                        "Mực nước thấp",
+                        $"{device.Name} có mực nước còn {level:0}% (ngưỡng {critical}%).",
+                        new Dictionary<string, string> { ["deviceId"] = device.Id.ToString() },
+                        push.AppLink($"/?device={device.Id}")));
+                    if (result.Failed > 0)
                     {
-                        await FirebaseMessaging.DefaultInstance.SendAsync(new Message
-                        {
-                            Token = device.Owner!.FcmToken,
-                            Notification = new FirebaseAdmin.Messaging.Notification
-                            {
-                                Title = "Mực nước thấp",
-                                Body = $"{device.Name} có mực nước còn {level:0}% (ngưỡng {critical}%).",
-                            },
-                        });
-                    }
-                    catch (FirebaseMessagingException ex)
-                    {
-                        logger.LogWarning(ex, "Failed to send low-water alert for device {DeviceId}", device.Id);
+                        logger.LogWarning("Low-water alert for device {DeviceId}: {Failed} of {Attempted} sends failed",
+                            device.Id, result.Failed, result.Attempted);
                     }
                 }
             }

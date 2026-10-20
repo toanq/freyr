@@ -187,6 +187,8 @@ builder.Services.AddSingleton<VoiceMqttDispatcher>();
 // circular dependency is avoided.
 builder.Services.Configure<MqttOptions>(builder.Configuration.GetSection("Mqtt"));
 builder.Services.Configure<MicTestUploadOptions>(builder.Configuration.GetSection("MicTestUploads"));
+builder.Services.AddSingleton<IPushSender, FirebasePushSender>();
+builder.Services.AddSingleton<PushNotifier>();
 builder.Services.AddSingleton<LowWaterAlertService>();
 builder.Services.AddSingleton<MqttService>();
 builder.Services.AddSingleton<IDeviceMqttPublisher>(sp => sp.GetRequiredService<MqttService>());
@@ -212,6 +214,13 @@ var app = builder.Build();
 var dashboardUsername = app.Configuration["Dashboard:Username"];
 var dashboardPassword = app.Configuration["Dashboard:Password"];
 var googleClientId = app.Configuration["OAuth:Google:ClientId"];
+// Google Identity Services on the web issues ID tokens for a separate *web*
+// OAuth client, so both client ids are accepted as the token audience.
+var googleWebClientId = app.Configuration["OAuth:Google:WebClientId"];
+var googleAudiences = new[] { googleClientId, googleWebClientId }
+    .Where(id => !string.IsNullOrWhiteSpace(id))
+    .Select(id => id!.Trim())
+    .ToArray();
 var facebookAppId = app.Configuration["OAuth:Facebook:AppId"];
 var facebookAppSecret = app.Configuration["OAuth:Facebook:AppSecret"];
 var facebookConfigured = !string.IsNullOrEmpty(facebookAppId) && !string.IsNullOrEmpty(facebookAppSecret);
@@ -231,9 +240,11 @@ if (!jwtConfigured)
         "to enable /auth/register, /auth/token and OAuth login.");
 }
 
-if (string.IsNullOrEmpty(googleClientId))
+if (googleAudiences.Length == 0)
 {
-    app.Logger.LogWarning("Google login is not configured — set OAuth__Google__ClientId to enable it.");
+    app.Logger.LogWarning(
+        "Google login is not configured — set OAuth__Google__ClientId (mobile) and/or " +
+        "OAuth__Google__WebClientId (web console) to enable it.");
 }
 
 if (!facebookConfigured)
@@ -334,7 +345,7 @@ app.MapPost("/auth/login", async (HttpContext http, SynoraDbContext db, LoginReq
         return Results.Unauthorized();
     }
 
-    await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, BuildPrincipal(user!, CookieAuthenticationDefaults.AuthenticationScheme));
+    await SessionAuth.SignInWebAsync(http, user!, persistent: request.RememberMe ?? true);
     return Results.Ok();
 });
 
@@ -366,14 +377,22 @@ app.MapGet("/auth/session", async (HttpContext http) =>
 });
 
 // --- Mobile auth (JWT): register, username/password, OAuth ---
+// `?cookie=true` (web console) signs the browser in with the same cookie as
+// /auth/login and returns 200 with no body, instead of issuing a JWT -- so
+// those calls don't need Jwt:SigningKey configured.
 
 var authGroup = app.MapGroup("/auth");
 
-authGroup.MapPost("/register", async (SynoraDbContext db, RegisterRequest request) =>
+authGroup.MapPost("/register", async (HttpContext http, SynoraDbContext db, RegisterRequest request, bool cookie = false) =>
 {
-    if (!jwtConfigured)
+    if (!cookie && !jwtConfigured)
     {
         return NotConfigured("Registration");
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password))
+    {
+        return Results.BadRequest("Username and password are required.");
     }
 
     if (await db.Users.AnyAsync(u => u.Username == request.Username))
@@ -394,7 +413,7 @@ authGroup.MapPost("/register", async (SynoraDbContext db, RegisterRequest reques
     db.Users.Add(user);
     await db.SaveChangesAsync();
 
-    return Results.Ok(new { token = IssueJwt(user, jwtSigningKey!) });
+    return await IssueSessionAsync(http, user, cookie, persistent: request.RememberMe ?? true);
 });
 
 authGroup.MapPost("/token", async (SynoraDbContext db, LoginRequest request) =>
@@ -413,9 +432,9 @@ authGroup.MapPost("/token", async (SynoraDbContext db, LoginRequest request) =>
     return Results.Ok(new { token = IssueJwt(user!, jwtSigningKey!) });
 });
 
-authGroup.MapPost("/oauth/google", async (SynoraDbContext db, GoogleLoginRequest request) =>
+authGroup.MapPost("/oauth/google", async (HttpContext http, SynoraDbContext db, GoogleLoginRequest request, bool cookie = false) =>
 {
-    if (!jwtConfigured || string.IsNullOrEmpty(googleClientId))
+    if ((!cookie && !jwtConfigured) || googleAudiences.Length == 0)
     {
         return NotConfigured("Google login");
     }
@@ -425,7 +444,7 @@ authGroup.MapPost("/oauth/google", async (SynoraDbContext db, GoogleLoginRequest
     {
         payload = await GoogleJsonWebSignature.ValidateAsync(request.IdToken, new GoogleJsonWebSignature.ValidationSettings
         {
-            Audience = [googleClientId],
+            Audience = googleAudiences,
         });
     }
     catch (InvalidJwtException)
@@ -448,12 +467,12 @@ authGroup.MapPost("/oauth/google", async (SynoraDbContext db, GoogleLoginRequest
         await db.SaveChangesAsync();
     }
 
-    return Results.Ok(new { token = IssueJwt(user, jwtSigningKey!) });
+    return await IssueSessionAsync(http, user, cookie, persistent: true);
 });
 
-authGroup.MapPost("/oauth/facebook", async (SynoraDbContext db, IHttpClientFactory httpClientFactory, FacebookLoginRequest request) =>
+authGroup.MapPost("/oauth/facebook", async (HttpContext http, SynoraDbContext db, IHttpClientFactory httpClientFactory, FacebookLoginRequest request, bool cookie = false) =>
 {
-    if (!jwtConfigured || !facebookConfigured)
+    if ((!cookie && !jwtConfigured) || !facebookConfigured)
     {
         return NotConfigured("Facebook login");
     }
@@ -497,8 +516,18 @@ authGroup.MapPost("/oauth/facebook", async (SynoraDbContext db, IHttpClientFacto
         await db.SaveChangesAsync();
     }
 
-    return Results.Ok(new { token = IssueJwt(user, jwtSigningKey!) });
+    return await IssueSessionAsync(http, user, cookie, persistent: true);
 });
+
+async Task<IResult> IssueSessionAsync(HttpContext http, User user, bool cookie, bool persistent)
+{
+    if (!cookie)
+    {
+        return Results.Ok(new { token = IssueJwt(user, jwtSigningKey!) });
+    }
+    await SessionAuth.SignInWebAsync(http, user, persistent);
+    return Results.Ok();
+}
 
 // --- User management (SuperAdmin only) ---
 
@@ -507,7 +536,7 @@ var usersGroup = app.MapGroup("/users").RequireAuthorization("SuperAdminOnly");
 usersGroup.MapGet("/", async (SynoraDbContext db) =>
     await db.Users
         .OrderBy(u => u.Username)
-        .Select(u => new UserSummaryDto(u.Id, u.Username, u.Email, u.Role.ToString(), u.CreatedAt, u.FcmToken != null))
+        .Select(u => new UserSummaryDto(u.Id, u.Username, u.Email, u.Role.ToString(), u.CreatedAt, db.PushTokens.Any(t => t.UserId == u.Id)))
         .ToListAsync());
 
 usersGroup.MapPost("/", async (SynoraDbContext db, CreateUserRequest request) =>
@@ -556,9 +585,9 @@ usersGroup.MapPost("/{id:guid}/reset-password", async (Guid id, SynoraDbContext 
     return Results.Ok();
 });
 
-usersGroup.MapPost("/{id:guid}/notifications/test", async (Guid id, SynoraDbContext db, SendTestNotificationRequest request) =>
+usersGroup.MapPost("/{id:guid}/notifications/test", async (Guid id, SynoraDbContext db, PushNotifier push, SendTestNotificationRequest request) =>
 {
-    if (!firebaseConfigured)
+    if (!push.IsConfigured)
     {
         return NotConfigured("Push notifications");
     }
@@ -568,43 +597,80 @@ usersGroup.MapPost("/{id:guid}/notifications/test", async (Guid id, SynoraDbCont
     {
         return Results.NotFound();
     }
-    if (string.IsNullOrEmpty(user.FcmToken))
+    if (!await db.PushTokens.AnyAsync(t => t.UserId == id))
     {
         return Results.BadRequest("This user has no registered device for push notifications.");
     }
 
-    var message = new Message
+    var result = await push.SendToUserAsync(db, id, new PushMessage(request.Title, request.Body, Link: push.AppLink("/")));
+    await db.SaveChangesAsync();
+    if (result.Sent == 0)
     {
-        Token = user.FcmToken,
-        Notification = new FirebaseAdmin.Messaging.Notification
-        {
-            Title = request.Title,
-            Body = request.Body,
-        },
-    };
-
-    try
-    {
-        await FirebaseMessaging.DefaultInstance.SendAsync(message);
-        return Results.Ok();
+        return Results.Problem(
+            title: "Failed to send notification",
+            detail: $"No registered device accepted it ({result.Removed} expired token(s) removed, {result.Failed} failed).",
+            statusCode: StatusCodes.Status502BadGateway);
     }
-    catch (FirebaseMessagingException ex)
-    {
-        return Results.Problem(title: "Failed to send notification", detail: ex.Message, statusCode: StatusCodes.Status502BadGateway);
-    }
+    return Results.Ok(new { result.Sent, result.Removed, result.Failed });
 });
 
 // Any authenticated user (the mobile app) registers/updates its own push token.
 app.MapPut("/users/me/fcm-token", async (SynoraDbContext db, HttpContext http, FcmTokenRequest request) =>
 {
-    var user = await db.Users.FindAsync(CurrentUserId(http));
-    if (user is null)
+    var userId = CurrentUserId(http);
+    if (await db.Users.FindAsync(userId) is null)
     {
         return Results.NotFound();
     }
-    user.FcmToken = request.Token;
+    var token = request.Token?.Trim();
+    if (string.IsNullOrEmpty(token) || token.Length > 4096)
+    {
+        return Results.BadRequest("Token is required.");
+    }
+    // The phone app sends only { token }; it predates the platform field.
+    var platform = request.Platform?.Trim().ToLowerInvariant() switch
+    {
+        null or "" => "android",
+        "android" or "ios" or "web" => request.Platform!.Trim().ToLowerInvariant(),
+        _ => null,
+    };
+    if (platform is null)
+    {
+        return Results.BadRequest("Platform must be android, ios or web.");
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    // Unique per token: re-registering moves it to the current user (shared browser/phone).
+    var existing = await db.PushTokens.FirstOrDefaultAsync(t => t.Token == token);
+    if (existing is null)
+    {
+        db.PushTokens.Add(new UserPushToken
+        {
+            UserId = userId, Token = token, Platform = platform, CreatedAt = now, UpdatedAt = now,
+        });
+    }
+    else
+    {
+        existing.UserId = userId;
+        existing.Platform = platform;
+        existing.UpdatedAt = now;
+    }
     await db.SaveChangesAsync();
     return Results.Ok();
+}).RequireAuthorization();
+
+// Web opt-out / sign-out: forget this installation's token.
+app.MapDelete("/users/me/fcm-token", async (SynoraDbContext db, HttpContext http, string token) =>
+{
+    var userId = CurrentUserId(http);
+    var existing = await db.PushTokens.FirstOrDefaultAsync(t => t.Token == token && t.UserId == userId);
+    if (existing is null)
+    {
+        return Results.NoContent();
+    }
+    db.PushTokens.Remove(existing);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
 }).RequireAuthorization();
 
 app.MapGet("/users/me", async (SynoraDbContext db, HttpContext http) =>
@@ -1097,7 +1163,7 @@ devicesGroup.MapPost("/{id:guid}/test-reading", async (
         RecordedAt = DateTimeOffset.UtcNow,
     });
 
-    await lowWaterAlerts.CheckLowWaterAlertAsync(device, request.WaterLevelPercent);
+    await lowWaterAlerts.CheckLowWaterAlertAsync(db, device, request.WaterLevelPercent);
     await db.SaveChangesAsync();
     return Results.Ok();
 }).RequireAuthorization();
@@ -2284,8 +2350,8 @@ static IResult NotConfigured(string feature) =>
         detail: "Ask the admin to check the server logs.",
         statusCode: StatusCodes.Status503ServiceUnavailable);
 
-record LoginRequest(string Username, string Password);
-record RegisterRequest(string Username, string? Email, string Password);
+record LoginRequest(string Username, string Password, bool? RememberMe = null);
+record RegisterRequest(string Username, string? Email, string Password, bool? RememberMe = null);
 record GoogleLoginRequest(string IdToken);
 record FacebookLoginRequest(string AccessToken);
 record CreateUserRequest(string Username, string Password, UserRole Role);
@@ -2308,7 +2374,7 @@ record TelemetryRequest(
     double? SoilMoisturePercent,
     double? WaterLevelPercent,
     string? XiaozhiActivationCode = null);
-record FcmTokenRequest(string Token);
+record FcmTokenRequest(string? Token, string? Platform = null);
 record SendTestNotificationRequest(string Title, string Body);
 record CreateWateringScheduleRequest(int Hour, int Minute, int DurationSeconds);
 record UpdateWateringScheduleRequest(int Hour, int Minute, int DurationSeconds, bool Enabled);

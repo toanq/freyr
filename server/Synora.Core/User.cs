@@ -11,6 +11,5 @@ public class User
     public string? FacebookId { get; set; }
     public required UserRole Role { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
-    public string? FcmToken { get; set; }
     public string? AvatarPath { get; set; }
 }

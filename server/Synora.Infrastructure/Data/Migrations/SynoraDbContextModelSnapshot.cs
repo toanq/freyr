@@ -352,9 +352,6 @@ namespace Synora.Infrastructure.Data.Migrations
                     b.Property<string>("FacebookId")
                         .HasColumnType("text");
 
-                    b.Property<string>("FcmToken")
-                        .HasColumnType("text");
-
                     b.Property<string>("GoogleId")
                         .HasColumnType("text");
 
@@ -378,6 +375,40 @@ namespace Synora.Infrastructure.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("Synora.Core.UserPushToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Token")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("PushTokens");
                 });
 
             modelBuilder.Entity("Synora.Core.WateringSchedule", b =>
@@ -449,6 +480,17 @@ namespace Synora.Infrastructure.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Device");
+                });
+
+            modelBuilder.Entity("Synora.Core.UserPushToken", b =>
+                {
+                    b.HasOne("Synora.Core.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Synora.Core.WateringSchedule", b =>

@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Synora.Core;
 
 namespace Synora.Api.Auth;
@@ -21,6 +23,14 @@ public static class SessionAuth
                 new Claim(ClaimTypes.Role, user.Role.ToString()),
             ],
             scheme));
+
+    // persistent=false -> session cookie (gone when the browser closes), the
+    // web equivalent of the app's unchecked "Ghi nhớ đăng nhập".
+    public static Task SignInWebAsync(HttpContext http, User user, bool persistent) =>
+        http.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            BuildPrincipal(user, CookieAuthenticationDefaults.AuthenticationScheme),
+            new AuthenticationProperties { IsPersistent = persistent });
 
     public static bool IsAdmin(ClaimsPrincipal principal) =>
         principal.IsInRole(nameof(UserRole.Admin)) || principal.IsInRole(nameof(UserRole.SuperAdmin));

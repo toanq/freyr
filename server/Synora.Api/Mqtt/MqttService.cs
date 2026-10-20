@@ -247,7 +247,7 @@ public sealed class MqttService : BackgroundService, IDeviceMqttPublisher, IVoic
         {
             device.FirmwareVersion = request.FirmwareVersion;
         }
-        await _lowWaterAlerts.CheckLowWaterAlertAsync(device, request.WaterLevelPercent);
+        await _lowWaterAlerts.CheckLowWaterAlertAsync(db, device, request.WaterLevelPercent);
         await db.SaveChangesAsync();
     }
 
