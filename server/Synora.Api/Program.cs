@@ -20,6 +20,7 @@ using Synora.Api.Auth;
 using Synora.Api.Cms;
 using Synora.Api.Firmware;
 using Synora.Api.Mqtt;
+using Synora.Api.Devices;
 using Synora.Api.Services;
 using Synora.Core;
 using Synora.Infrastructure;
@@ -929,90 +930,8 @@ devicesGroup.MapGet("/", async (SynoraDbContext db, HttpContext http) =>
         query = query.Where(d => d.OwnerUserId == userId);
     }
 
-    var devices = await query
-        .OrderBy(d => d.Name)
-        .Select(d => new
-        {
-            d.Id,
-            d.Name,
-            d.MacAddress,
-            d.PairedAt,
-            d.LastSeenAt,
-            d.LowWaterWarningThresholdPercent,
-            d.LowWaterCriticalThresholdPercent,
-            d.LowWaterAlertIntervalMinutes,
-            d.XiaozhiActivationCode,
-            d.Muted,
-            d.FirmwareVersion,
-            AvatarUrl = d.AvatarPath != null ? $"/devices/{d.Id}/avatar" : null,
-            Owner = d.Owner != null ? d.Owner.Username : null,
-            LatestReading = db.SensorReadings
-                .Where(r => r.DeviceId == d.Id)
-                .OrderByDescending(r => r.RecordedAt)
-                .Select(r => new SensorReadingDto(
-                    r.TemperatureCelsius, r.HumidityPercent, r.SoilMoisturePercent, r.WaterLevelPercent, r.RecordedAt))
-                .FirstOrDefault(),
-        })
-        .ToListAsync();
-
-    // Computed in memory (not translatable as a clean single SQL projection)
-    // -- was duplicated client-side logic in the Flutter app before, moved
-    // here so both the app and any future client get the same suggestion
-    // from one place. Projected into a named record (not an anonymous type)
-    // -- Swashbuckle can't produce a valid $ref name for an anonymous type
-    // wrapping another anonymous type (LatestReading), which broke Swagger
-    // UI's rendering entirely ("Unable to render this definition").
-    return devices.Select(d => new DeviceSummaryDto(
-        d.Id,
-        d.Name,
-        d.MacAddress,
-        d.PairedAt,
-        d.LowWaterWarningThresholdPercent,
-        d.LowWaterCriticalThresholdPercent,
-        d.LowWaterAlertIntervalMinutes,
-        d.AvatarUrl,
-        d.Owner,
-        d.LatestReading,
-        ComputeCareSuggestion(
-            d.LatestReading?.SoilMoisturePercent,
-            d.LatestReading?.TemperatureCelsius,
-            d.LatestReading?.HumidityPercent,
-            d.LatestReading?.WaterLevelPercent),
-        ComputeIsOnline(d.LastSeenAt),
-        d.XiaozhiActivationCode,
-        d.Muted,
-        d.FirmwareVersion));
+    return await DeviceSummaries.ListAsync(db, query.OrderBy(d => d.Name));
 }).RequireAuthorization();
-
-// Any device-trust-model request (telemetry/pending-command/schedules) counts
-// as a heartbeat -- IsOnline is computed from LastSeenAt at query time (not
-// persisted) so this threshold can be tuned without a migration.
-static bool ComputeIsOnline(DateTimeOffset? lastSeenAt) =>
-    lastSeenAt is not null && lastSeenAt > DateTimeOffset.UtcNow.AddSeconds(-60);
-
-// Mirrors the thresholds/copy the Flutter app used to compute client-side
-// (device_detail_screen.dart's _statusFor/"AI care suggestion" card) --
-// same four metrics, same low/high bands, same three messages.
-static string ComputeCareSuggestion(double? soil, double? temperature, double? humidity, double? water)
-{
-    static string StatusFor(double? value, double low, double high) =>
-        value is null ? "—" : value < low ? "Thấp" : value > high ? "Cao" : "Tốt";
-
-    var soilStatus = StatusFor(soil, 30, 60);
-    var tempStatus = StatusFor(temperature, 18, 30);
-    var humidityStatus = StatusFor(humidity, 40, 80);
-    var waterStatus = StatusFor(water, 20, 100);
-
-    if (soilStatus == "Thấp")
-    {
-        return "Đất khá khô, bạn nên tưới nước cho cây.";
-    }
-    if (new[] { soilStatus, tempStatus, humidityStatus, waterStatus }.All(s => s == "Tốt"))
-    {
-        return "Cây của bạn đang phát triển tốt, chưa cần chăm sóc thêm.";
-    }
-    return "Một vài chỉ số chưa lý tưởng, hãy theo dõi cây trong vài ngày tới.";
-}
 
 devicesGroup.MapGet("/{id:guid}", async (Guid id, SynoraDbContext db, HttpContext http) =>
 {
@@ -1024,56 +943,8 @@ devicesGroup.MapGet("/{id:guid}", async (Guid id, SynoraDbContext db, HttpContex
         query = query.Where(d => d.OwnerUserId == userId);
     }
 
-    var device = await query
-        .Select(d => new
-        {
-            d.Id,
-            d.Name,
-            d.MacAddress,
-            d.PairedAt,
-            d.LastSeenAt,
-            d.LowWaterWarningThresholdPercent,
-            d.LowWaterCriticalThresholdPercent,
-            d.LowWaterAlertIntervalMinutes,
-            d.XiaozhiActivationCode,
-            d.Muted,
-            d.FirmwareVersion,
-            AvatarUrl = d.AvatarPath != null ? $"/devices/{d.Id}/avatar" : null,
-            Owner = d.Owner != null ? d.Owner.Username : null,
-            LatestReading = db.SensorReadings
-                .Where(r => r.DeviceId == d.Id)
-                .OrderByDescending(r => r.RecordedAt)
-                .Select(r => new SensorReadingDto(
-                    r.TemperatureCelsius, r.HumidityPercent, r.SoilMoisturePercent, r.WaterLevelPercent, r.RecordedAt))
-                .FirstOrDefault(),
-        })
-        .FirstOrDefaultAsync();
-
-    if (device is null)
-    {
-        return Results.NotFound();
-    }
-
-    return Results.Ok(new DeviceSummaryDto(
-        device.Id,
-        device.Name,
-        device.MacAddress,
-        device.PairedAt,
-        device.LowWaterWarningThresholdPercent,
-        device.LowWaterCriticalThresholdPercent,
-        device.LowWaterAlertIntervalMinutes,
-        device.AvatarUrl,
-        device.Owner,
-        device.LatestReading,
-        ComputeCareSuggestion(
-            device.LatestReading?.SoilMoisturePercent,
-            device.LatestReading?.TemperatureCelsius,
-            device.LatestReading?.HumidityPercent,
-            device.LatestReading?.WaterLevelPercent),
-        ComputeIsOnline(device.LastSeenAt),
-        device.XiaozhiActivationCode,
-        device.Muted,
-        device.FirmwareVersion));
+    var device = (await DeviceSummaries.ListAsync(db, query)).FirstOrDefault();
+    return device is null ? Results.NotFound() : Results.Ok(device);
 }).RequireAuthorization();
 
 // Most-recent-first page of this device's voice conversation history (see
@@ -1247,33 +1118,9 @@ devicesGroup.MapDelete("/{id:guid}", async (Guid id, SynoraDbContext db, HttpCon
         return Results.NotFound();
     }
 
-    // Clears the previous owner's personalization -- a device sitting
-    // unpaired/re-pairable in the system shouldn't keep showing whoever had
-    // it last's chosen photo.
-    if (device.AvatarPath is not null)
-    {
-        var avatarPath = Path.Combine(avatarStoragePath, device.AvatarPath);
-        if (File.Exists(avatarPath))
-        {
-            File.Delete(avatarPath);
-        }
-        device.AvatarPath = null;
-    }
-
-    // Same reasoning as the avatar above -- the watering schedule and
-    // low-water alert configuration are the previous owner's settings, not
-    // something a new owner pairing this same physical device later should
-    // inherit. Deleted/reset here (not just left for the next owner to
-    // notice and change) since PublishStateAsync below re-reads schedules
-    // fresh from the DB -- doing this first means the retained state the
-    // device (and BLE deviceInfo) picks up already reflects "no schedules"
-    // instead of a stale list belonging to someone else.
-    var oldSchedules = await db.WateringSchedules.Where(s => s.DeviceId == id).ToListAsync();
-    db.WateringSchedules.RemoveRange(oldSchedules);
-    device.LowWaterWarningThresholdPercent = null;
-    device.LowWaterCriticalThresholdPercent = null;
-    device.LowWaterAlertIntervalMinutes = null;
-    device.LowWaterLastAlertedAt = null;
+    // Drops the previous owner's photo, watering schedules and low-water
+    // alert settings (see DeviceOwnership) before isPaired flips below.
+    await DeviceOwnership.ClearOwnerSettingsAsync(db, device, avatarStoragePath);
 
     device.OwnerUserId = null;
     device.PairedAt = null;
@@ -2278,6 +2125,7 @@ devicesGroup.MapPost("/{id:guid}/ota", async (
 
 // Landing-site CMS (/cms/*) -- endpoints + one-time legacy SQLite import live in Cms/.
 app.MapCms();
+app.MapAdminDeviceOwner(avatarStoragePath);
 
 app.Run();
 

@@ -433,8 +433,13 @@ internal sealed class FakeDevicePublisher : IDeviceMqttPublisher
 {
     public bool IsConnected { get; set; } = true;
     public List<(Guid DeviceId, string Version, string DownloadUrl)> OtaCommands { get; } = [];
+    public List<Guid> StateUpdates { get; } = [];
 
-    public Task PublishStateAsync(Guid deviceId, CancellationToken ct = default) => Task.CompletedTask;
+    public Task PublishStateAsync(Guid deviceId, CancellationToken ct = default)
+    {
+        StateUpdates.Add(deviceId);
+        return Task.CompletedTask;
+    }
     public Task PublishWaterCommandAsync(Guid deviceId, int durationSeconds, CancellationToken ct = default) => Task.CompletedTask;
     public Task PublishPingCommandAsync(Guid deviceId, CancellationToken ct = default) => Task.CompletedTask;
 

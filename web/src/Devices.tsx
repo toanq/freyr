@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiFetch } from './api'
 import { useI18n } from './i18n'
 import DeviceDetail from './device/DeviceDetail'
+import OwnerPicker from './device/OwnerPicker'
 import { useDeviceRoute } from './device/deviceRoute'
 import BlePairing from './ble/BlePairing'
 
@@ -56,6 +57,8 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
   const [discussionsError, setDiscussionsError] = useState<string | null>(null)
   const { t, formatDate } = useI18n()
   const [detailId, openDetail, closeDetail] = useDeviceRoute()
+  const [ownerDeviceId, setOwnerDeviceId] = useState<string | null>(null)
+  const ownerDevice = isAdmin ? devices.find((d) => d.id === ownerDeviceId) : undefined
 
   const load = () => {
     apiFetch('/devices')
@@ -246,7 +249,16 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
                 defaultValue={d.name}
                 onBlur={(e) => e.target.value !== d.name && handleRename(d.id, e.target.value)}
               />
-              {isAdmin && <span className="chip">{d.owner ?? t('devices.noOwner')}</span>}
+              {isAdmin && (
+                <button
+                  type="button"
+                  className="chip chip-button"
+                  title={t('owner.title')}
+                  onClick={() => setOwnerDeviceId(d.id)}
+                >
+                  {d.owner ?? t('devices.noOwner')}
+                </button>
+              )}
             </div>
             <div className="device-meta">
               <span className={d.isOnline ? 'device-status online' : 'device-status'}>
@@ -327,6 +339,20 @@ function Devices({ isAdmin }: { isAdmin: boolean }) {
           </li>
         ))}
       </ul>
+      {ownerDevice && (
+        <OwnerPicker
+          deviceId={ownerDevice.id}
+          deviceName={ownerDevice.name}
+          currentOwner={ownerDevice.owner}
+          onClose={() => setOwnerDeviceId(null)}
+          onChanged={(updated) => {
+            setStatusMessage(
+              updated.owner ? t('owner.assigned', { user: updated.owner }) : t('owner.cleared'),
+            )
+            load()
+          }}
+        />
+      )}
     </section>
   )
 }

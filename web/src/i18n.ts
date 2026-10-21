@@ -106,6 +106,36 @@ export const strings = {
   'discussions.loading': { vi: 'Đang tải…', en: 'Loading…' },
   'discussions.playFailed': { vi: 'Không thể tải bản ghi.', en: 'Could not load recording.' },
 
+  // device owner (admin) -- device/OwnerPicker.tsx, OwnerSection.tsx
+  'owner.title': { vi: 'Chủ sở hữu', en: 'Owner' },
+  'owner.none': { vi: 'Chưa liên kết tài khoản nào', en: 'Not linked to any account' },
+  'owner.current': { vi: 'đang thuộc {owner}', en: 'owned by {owner}' },
+  'owner.assignToAccount': { vi: 'Gán cho tài khoản', en: 'Assign to account' },
+  'owner.change': { vi: 'Đổi chủ sở hữu', en: 'Change owner' },
+  'owner.searchPlaceholder': { vi: 'Tìm theo tên đăng nhập hoặc email', en: 'Search by username or email' },
+  'owner.minChars': { vi: 'Nhập ít nhất 2 ký tự.', en: 'Type at least 2 characters.' },
+  'owner.searching': { vi: 'Đang tìm…', en: 'Searching…' },
+  'owner.noResults': { vi: 'Không tìm thấy tài khoản nào.', en: 'No matching accounts.' },
+  'owner.isCurrent': { vi: 'Hiện tại', en: 'Current' },
+  'owner.confirmAssign': { vi: 'Gán "{device}" cho tài khoản {user}?', en: 'Assign "{device}" to {user}?' },
+  'owner.confirmClear': {
+    vi: 'Huỷ liên kết "{device}" khỏi tài khoản {owner}? Thiết bị sẽ quay về chế độ chờ ghép nối.',
+    en: 'Unlink "{device}" from {owner}? The device goes back to waiting for pairing.',
+  },
+  'owner.resetWarning': {
+    vi: 'Lịch tưới, cảnh báo mực nước và ảnh của chủ cũ sẽ bị xoá.',
+    en: "The previous owner's watering schedules, low-water alerts and photo will be removed.",
+  },
+  'owner.assign': { vi: 'Gán', en: 'Assign' },
+  'owner.unlink': { vi: 'Huỷ liên kết', en: 'Unlink' },
+  'owner.cancel': { vi: 'Huỷ', en: 'Cancel' },
+  'owner.close': { vi: 'Đóng', en: 'Close' },
+  'owner.saving': { vi: 'Đang lưu…', en: 'Saving…' },
+  'owner.assigned': { vi: 'Đã gán thiết bị cho {user}.', en: 'Device assigned to {user}.' },
+  'owner.cleared': { vi: 'Đã huỷ liên kết thiết bị.', en: 'Device unlinked.' },
+  'owner.searchFailed': { vi: 'Không tìm được tài khoản ({error}).', en: 'Account search failed ({error}).' },
+  'owner.saveFailed': { vi: 'Không lưu được ({error}).', en: 'Could not save ({error}).' },
+
   // device page
   'dp.back': { vi: 'Quay lại', en: 'Back' },
   'dp.details': { vi: 'Chi tiết', en: 'Details' },

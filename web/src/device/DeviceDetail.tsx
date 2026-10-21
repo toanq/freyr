@@ -5,6 +5,7 @@ import AssistantTalk from './AssistantTalk'
 import DeviceHeader from './DeviceHeader'
 import LowWaterAlerts from './LowWaterAlerts'
 import Metrics from './Metrics'
+import OwnerSection from './OwnerSection'
 import QuickActions from './QuickActions'
 import Schedules from './Schedules'
 import type { DeviceDetailDto, WateringSchedule } from './types'
@@ -125,6 +126,7 @@ function DetailBody(p: BodyProps) {
         onDeleted={p.onDeleted}
         notify={p.notify}
       />
+      {p.isAdmin && <OwnerSection device={p.device} onChanged={p.patchDevice} notify={p.notify} />}
       <QuickActions device={p.device} onChanged={p.patchDevice} onTalk={() => p.setTalking(true)} notify={p.notify} />
       {p.talking && <AssistantTalk deviceId={p.device.id} onClose={() => p.setTalking(false)} />}
       <Metrics device={p.device} />
