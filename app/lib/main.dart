@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'api_client.dart';
 import 'app_config.dart';
 import 'auth/auth_screen.dart';
+import 'common/network_status.dart';
+import 'common/offline_banner.dart';
 import 'devices/device_list_screen.dart';
 import 'push_notifications.dart';
 
@@ -27,7 +30,24 @@ void main() async {
   }
   final apiBaseUrl = await loadApiBaseUrl();
   runApp(ProviderScope(
-    overrides: [apiClientProvider.overrideWithValue(ApiClient(baseUrl: apiBaseUrl))],
+    overrides: [
+      // Callbacks read NetworkStatus lazily (at request time), so the two
+      // providers can refer to each other without a construction cycle.
+      apiClientProvider.overrideWith((ref) => ApiClient(
+            baseUrl: apiBaseUrl,
+            onTransportResult: ({required bool ok}) =>
+                ref.read(networkStatusProvider.notifier).reportTransportResult(ok: ok),
+            isDefinitelyOffline: () => ref.read(networkStatusProvider.notifier).hasNoInterface,
+          )),
+      networkStatusProvider.overrideWith((ref) {
+        final connectivity = Connectivity();
+        return NetworkStatus(
+          connectivityChanges: connectivity.onConnectivityChanged,
+          checkConnectivity: connectivity.checkConnectivity,
+          probe: () => ref.read(apiClientProvider).probe(),
+        );
+      }),
+    ],
     child: const SynoraApp(),
   ));
 }
@@ -72,6 +92,7 @@ class _SynoraAppState extends ConsumerState<SynoraApp> {
       title: 'Synora',
       theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
       navigatorObservers: [routeObserver],
+      builder: (context, child) => OfflineBannerScope(child: child ?? const SizedBox.shrink()),
       home: _checkingRememberedSession
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : (loggedIn ? const DeviceListScreen() : const AuthScreen()),

@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
+import '../common/network_errors.dart';
 import '../main.dart';
 import 'device_detail_screen.dart';
 
@@ -178,7 +179,7 @@ class _AssistantTalkSheetState extends ConsumerState<AssistantTalkSheet> {
     } catch (e) {
       await _stopAll();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể ghi âm: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể ghi âm: ${friendlyError(e)}')));
       }
       return;
     }
@@ -275,7 +276,7 @@ class _AssistantTalkSheetState extends ConsumerState<AssistantTalkSheet> {
       await _speak(result['replyAudioWavBase64'] as String?);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể trò chuyện: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể trò chuyện: ${friendlyError(e)}')));
         setState(() => _state = _TalkState.idle);
       }
     } finally {
@@ -317,7 +318,7 @@ class _AssistantTalkSheetState extends ConsumerState<AssistantTalkSheet> {
       await _player.play(DeviceFileSource(replyPath, mimeType: 'audio/wav'));
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể phát âm thanh trả lời: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể phát âm thanh trả lời: ${friendlyError(e)}')));
         if (_state == _TalkState.speaking) await _continueOrStop();
       }
     }

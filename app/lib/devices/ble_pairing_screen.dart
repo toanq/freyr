@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -8,8 +9,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../api_client.dart';
+import '../common/network_errors.dart';
+import '../common/network_status.dart';
 import '../main.dart';
+import 'bluetooth_state_card.dart';
 import 'device_detail_screen.dart';
+import 'pending_pairing.dart';
 
 class _WifiNetwork {
   _WifiNetwork({required this.ssid, required this.rssi});
@@ -32,7 +37,32 @@ class SynoraBleUuids {
   static final firmware = Guid('917c4e8b-025d-3a9f-1e4c-776a2d1b8e4f');
 }
 
-enum _Step { permissions, scanning, connecting, alreadyPaired, wifiForm, joining, activating, done, error }
+enum _Step {
+  permissions,
+  bluetoothOff,
+  locationOff,
+  scanning,
+  connecting,
+  alreadyPaired,
+  wifiForm,
+  joining,
+  activating,
+  bluetoothInterrupted,
+  waitingForNetwork,
+  done,
+  error,
+}
+
+// Steps that need a live BLE link (or an active scan) -- the adapter turning
+// off in any of these interrupts the flow.
+const _bleSteps = {
+  _Step.scanning,
+  _Step.connecting,
+  _Step.alreadyPaired,
+  _Step.wifiForm,
+  _Step.joining,
+  _Step.activating,
+};
 
 // Shown only on a server-confirmed 409 (the real, authoritative check) --
 // unlike the BLE deviceInfo isPaired pre-check, which is just the device's
@@ -90,6 +120,14 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
   // timeout/completion, silently, instead of being forcibly torn down.
   int _submitGeneration = 0;
 
+  BluetoothAdapterState _adapterState = FlutterBluePlus.adapterStateNow;
+  StreamSubscription<BluetoothAdapterState>? _adapterSub;
+  // Where the flow was when Bluetooth got turned off, so "Thử lại" resumes
+  // from the right place (rescan vs. reconnect to the same device).
+  _Step? _interruptedAt;
+  // Online/offline changes feed the pending final pairing request.
+  final _onlineChanges = StreamController<bool>.broadcast();
+
   @override
   void initState() {
     super.initState();
@@ -99,12 +137,16 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
     // the pairing hung. Released in dispose() regardless of how this screen
     // is exited (success, back button, or an error).
     WakelockPlus.enable();
+    _adapterSub = FlutterBluePlus.adapterState.listen(_onAdapterState, onError: (_) {});
+    ref.listenManual<bool>(networkStatusProvider, (_, online) => _onlineChanges.add(online));
     _requestPermissionsThenScan();
   }
 
   @override
   void dispose() {
     WakelockPlus.disable();
+    _adapterSub?.cancel();
+    _onlineChanges.close();
     _passwordFocusNode.dispose();
     _scanSub?.cancel();
     FlutterBluePlus.stopScan();
@@ -151,7 +193,76 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       return;
     }
 
+    // Android 11 and older also need Location Services on to see any BLE
+    // advertisements. locationWhenInUse is only declared up to API 30
+    // (AndroidManifest.xml), so it's only ever granted on those versions.
+    if (Platform.isAndroid &&
+        statuses[Permission.locationWhenInUse]!.isGranted &&
+        !await Permission.location.serviceStatus.isEnabled) {
+      if (!mounted) return;
+      setState(() => _step = _Step.locationOff);
+      return;
+    }
+
+    if (_adapterState != BluetoothAdapterState.on) {
+      // _onAdapterState() starts the scan once it turns on.
+      if (!mounted) return;
+      setState(() => _step = _Step.bluetoothOff);
+      return;
+    }
+
     await _scan();
+  }
+
+  void _onAdapterState(BluetoothAdapterState state) {
+    if (!mounted) return;
+    final wasOn = _adapterState == BluetoothAdapterState.on;
+    setState(() => _adapterState = state);
+    if (state == BluetoothAdapterState.on) {
+      if (_step == _Step.bluetoothOff) _scan();
+      return;
+    }
+    // turningOn/unknown are transient; everything else means BLE is gone.
+    if (!wasOn || state == BluetoothAdapterState.turningOn || state == BluetoothAdapterState.unknown) return;
+    if (_bleSteps.contains(_step)) _interruptForBluetoothOff();
+  }
+
+  // Bluetooth went off mid-flow: stop everything that depends on it cleanly
+  // and wait for the user to retry once it's back.
+  void _interruptForBluetoothOff() {
+    final at = _step;
+    _submitGeneration++; // in-flight _submitWifi()/pairing calls become no-ops
+    _scanSub?.cancel();
+    FlutterBluePlus.stopScan().catchError((_) {});
+    _device?.disconnect().catchError((_) {});
+    setState(() {
+      _interruptedAt = at;
+      _step = _Step.bluetoothInterrupted;
+      _error = null;
+    });
+  }
+
+  Future<void> _resumeAfterBluetooth() async {
+    final at = _interruptedAt;
+    _interruptedAt = null;
+    if (at == null || at == _Step.scanning || _device == null) {
+      await _scan();
+    } else {
+      // Reconnect to the same device: lands on the Wi-Fi form (or the
+      // already-paired prompt), the start of everything after scanning.
+      await _retry();
+    }
+  }
+
+  Future<void> _turnOnBluetooth() async {
+    try {
+      await FlutterBluePlus.turnOn();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Bluetooth vẫn đang tắt.')));
+      }
+    }
   }
 
   Future<void> _scan() async {
@@ -179,7 +290,7 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       if (!mounted) return;
       setState(() {
         _step = _Step.error;
-        _error = e.toString();
+        _error = friendlyError(e);
       });
     }
   }
@@ -212,7 +323,7 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       if (!mounted) return;
       setState(() {
         _step = _Step.error;
-        _error = e.toString();
+        _error = friendlyError(e);
       });
     }
   }
@@ -595,7 +706,7 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       if (_isStale(myGeneration)) return;
       setState(() {
         _step = _Step.error;
-        _error = e is ApiException && e.statusCode == 409 ? _kAlreadyPairedMessage : e.toString();
+        _error = e is ApiException && e.statusCode == 409 ? _kAlreadyPairedMessage : friendlyError(e);
       });
     }
   }
@@ -603,7 +714,19 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
   Future<void> _pairWithCode(String code, String? macAddress, int myGeneration) async {
     debugPrint('SYNORA_DEBUG: pairing with code="$code" mac=$macAddress');
     try {
-      await ref.read(apiClientProvider).pairDevice(code, macAddress: macAddress);
+      final pending = PendingPairing(
+        pair: (c, mac) => ref.read(apiClientProvider).pairDevice(c, macAddress: mac),
+        code: code,
+        macAddress: macAddress,
+      );
+      if (!await pending.attempt(online: ref.read(networkStatusProvider))) {
+        // Phone is offline right as the device finished activating: keep the
+        // activation code and finish as soon as the network is back.
+        if (_isStale(myGeneration)) return;
+        setState(() => _step = _Step.waitingForNetwork);
+        final paired = await pending.completeWhenOnline(_onlineChanges.stream, onlineNow: false);
+        if (!paired || _isStale(myGeneration)) return;
+      }
       // Called directly here rather than relying on Navigator.push()'s
       // returned Future resolving (which depends on exactly how/when this
       // route gets popped) -- this way the list refreshes the moment pairing
@@ -667,9 +790,15 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
       if (_isStale(myGeneration)) return;
       setState(() {
         _step = _Step.error;
-        _error = e is ApiException && e.statusCode == 409 ? _kAlreadyPairedMessage : e.toString();
+        _error = e is ApiException && e.statusCode == 409 ? _kAlreadyPairedMessage : friendlyError(e);
       });
     }
+  }
+
+  // "Thử lại" on the waiting-for-network step: one immediate attempt in case
+  // the network is back but no connectivity change was reported.
+  void _retryPendingPairNow() {
+    _onlineChanges.add(true);
   }
 
   InputDecoration _fieldDecoration(String label) {
@@ -697,6 +826,43 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen> {
           style: const TextStyle(color: Colors.white),
           child: switch (_step) {
             _Step.permissions => const Center(child: Text('Đang yêu cầu quyền…')),
+            _Step.bluetoothOff => BluetoothStateCard(
+                state: _adapterState,
+                onTurnOn: _turnOnBluetooth,
+                onOpenSettings: openAppSettings,
+              ),
+            _Step.locationOff => LocationServicesCard(onRetry: _requestPermissionsThenScan),
+            _Step.bluetoothInterrupted => BluetoothInterruptedView(
+                message: 'Kết nối với thiết bị đã bị ngắt. Bật lại Bluetooth rồi thử lại để tiếp tục ghép nối.',
+                bluetoothOn: _adapterState == BluetoothAdapterState.on,
+                onRetry: _resumeAfterBluetooth,
+                onTurnOn: _turnOnBluetooth,
+              ),
+            _Step.waitingForNetwork => Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.wifi_off_rounded, size: 40, color: DeviceDetailScreen.lowColor),
+                    const SizedBox(height: 12),
+                    const Text('Đang chờ kết nối mạng để hoàn tất ghép nối…', textAlign: TextAlign.center),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Thiết bị đã kết nối Wi-Fi. Ghép nối sẽ tự hoàn tất khi điện thoại có mạng trở lại.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: DeviceDetailScreen.goodColor,
+                        foregroundColor: DeviceDetailScreen.backgroundColor,
+                      ),
+                      onPressed: _retryPendingPairNow,
+                      child: const Text('Thử lại'),
+                    ),
+                  ],
+                ),
+              ),
             _Step.scanning => _buildScanningView(),
             _Step.connecting => const Center(child: Text('Đang kết nối…')),
             _Step.alreadyPaired => Center(

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../common/network_errors.dart';
 import '../devices/device_detail_screen.dart';
 import '../main.dart';
 import '../push_notifications.dart';
@@ -44,7 +45,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       ref.read(isLoggedInProvider.notifier).state = true;
       unawaited(registerForPushNotifications(api));
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = friendlyError(e));
     } finally {
       setState(() => _submitting = false);
     }

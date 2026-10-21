@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../common/network_errors.dart';
+import '../common/network_status.dart';
 import '../auth/user_profile_screen.dart';
 import '../main.dart';
 import 'ble_firmware_update_screen.dart';
@@ -35,6 +37,13 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> with RouteA
       if (mounted) setState(() => _isAdmin = role == 'Admin' || role == 'SuperAdmin');
     }).catchError((_) {});
     _loadMyAvatar();
+    // Back online after being offline: refresh the list (and avatar).
+    ref.listenManual<bool>(networkStatusProvider, (wasOnline, online) {
+      if (wasOnline == false && online) {
+        _reload();
+        _loadMyAvatar();
+      }
+    });
   }
 
   Future<void> _loadMyAvatar() async {
@@ -139,7 +148,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> with RouteA
                 children: [
                   const SizedBox(height: 120),
                   Center(
-                    child: Text('Không thể tải danh sách thiết bị: ${snapshot.error}',
+                    child: Text('Không thể tải danh sách thiết bị: ${friendlyError(snapshot.error!)}',
                         style: const TextStyle(color: Colors.white70)),
                   ),
                   const SizedBox(height: 16),

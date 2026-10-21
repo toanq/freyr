@@ -8,20 +8,27 @@ import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../common/network_errors.dart';
 import '../main.dart';
 import 'ble_pairing_screen.dart' show SynoraBleUuids;
+import 'bluetooth_state_card.dart';
 import 'device_detail_screen.dart';
 
 enum _Step {
   permissions,
+  bluetoothOff,
+  locationOff,
   scanning,
   connecting,
   selectingBuild,
   downloading,
   uploading,
+  bluetoothInterrupted,
   done,
   error,
 }
+
+const _bleSteps = {_Step.scanning, _Step.connecting, _Step.selectingBuild, _Step.downloading, _Step.uploading};
 
 // Fallback for a device with no Wi-Fi yet (or that never got provisioned at
 // all): pushes a firmware build already uploaded to the server straight over
@@ -47,6 +54,16 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
   double _uploadProgress = 0;
   String _statusText = '';
 
+  BluetoothAdapterState _adapterState = FlutterBluePlus.adapterStateNow;
+  StreamSubscription<BluetoothAdapterState>? _adapterSub;
+  // Bumped when Bluetooth turns off mid-flow so the interrupted _pushBuild()
+  // / _connectThenLoadBuilds() don't overwrite the "turned off" screen with
+  // their own write/connect errors.
+  int _flowGeneration = 0;
+  bool _commitSent = false;
+  _Step? _interruptedAt;
+  String _interruptedMessage = '';
+
   @override
   void initState() {
     super.initState();
@@ -54,12 +71,14 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
     // chunked transfer of a multi-MB binary) can run well past a minute, and
     // the screen locking mid-transfer would interrupt the BLE link.
     WakelockPlus.enable();
+    _adapterSub = FlutterBluePlus.adapterState.listen(_onAdapterState, onError: (_) {});
     _requestPermissionsThenScan();
   }
 
   @override
   void dispose() {
     WakelockPlus.disable();
+    _adapterSub?.cancel();
     _scanSub?.cancel();
     FlutterBluePlus.stopScan();
     _device?.disconnect().catchError((_) {});
@@ -84,7 +103,76 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
       });
       return;
     }
+    // Android 11 and older also need Location Services on for BLE scanning
+    // (locationWhenInUse is only declared, and grantable, up to API 30).
+    if (Platform.isAndroid &&
+        statuses[Permission.locationWhenInUse]!.isGranted &&
+        !await Permission.location.serviceStatus.isEnabled) {
+      if (!mounted) return;
+      setState(() => _step = _Step.locationOff);
+      return;
+    }
+    if (_adapterState != BluetoothAdapterState.on) {
+      if (!mounted) return;
+      setState(() => _step = _Step.bluetoothOff);
+      return;
+    }
     await _scan();
+  }
+
+  void _onAdapterState(BluetoothAdapterState state) {
+    if (!mounted) return;
+    final wasOn = _adapterState == BluetoothAdapterState.on;
+    setState(() => _adapterState = state);
+    if (state == BluetoothAdapterState.on) {
+      if (_step == _Step.bluetoothOff) _scan();
+      return;
+    }
+    if (!wasOn || state == BluetoothAdapterState.turningOn || state == BluetoothAdapterState.unknown) return;
+    if (_bleSteps.contains(_step)) _interruptForBluetoothOff();
+  }
+
+  void _interruptForBluetoothOff() {
+    final at = _step;
+    _flowGeneration++;
+    _scanSub?.cancel();
+    FlutterBluePlus.stopScan().catchError((_) {});
+    _device?.disconnect().catchError((_) {});
+    // Firmware side (BleProvisioning, BLE_GAP_EVENT_DISCONNECT): a transfer
+    // that hasn't been committed is aborted with esp_ota_abort() and the
+    // device keeps running its current firmware; once ota_commit was
+    // accepted, the device finishes verifying/installing on its own.
+    final message = at == _Step.uploading && _commitSent
+        ? 'Thiết bị đã nhận đủ firmware và sẽ tự cài đặt rồi khởi động lại. Không cần gửi lại.'
+        : at == _Step.uploading
+            ? 'Quá trình gửi firmware bị gián đoạn. Thiết bị đã huỷ bản cập nhật và vẫn chạy firmware cũ — hãy thử lại.'
+            : 'Kết nối Bluetooth với thiết bị đã bị ngắt.';
+    setState(() {
+      _interruptedAt = at;
+      _interruptedMessage = message;
+      _step = _Step.bluetoothInterrupted;
+    });
+  }
+
+  Future<void> _resumeAfterBluetooth() async {
+    final at = _interruptedAt;
+    _interruptedAt = null;
+    if (at == null || at == _Step.scanning || _device == null) {
+      await _scan();
+    } else {
+      // Reconnect to the same device and pick the build again.
+      await _connectThenLoadBuilds();
+    }
+  }
+
+  Future<void> _turnOnBluetooth() async {
+    try {
+      await FlutterBluePlus.turnOn();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth vẫn đang tắt.')));
+      }
+    }
   }
 
   Future<void> _scan() async {
@@ -110,7 +198,7 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
       if (!mounted) return;
       setState(() {
         _step = _Step.error;
-        _error = e.toString();
+        _error = friendlyError(e);
       });
     }
   }
@@ -124,6 +212,7 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
 
   Future<void> _connectThenLoadBuilds() async {
     if (!mounted) return;
+    final myGeneration = ++_flowGeneration;
     setState(() => _step = _Step.connecting);
     try {
       await _device!.connect();
@@ -140,7 +229,7 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
       await _device!.discoverServices();
 
       final builds = await ref.read(apiClientProvider).listFirmwareBuilds();
-      if (!mounted) return;
+      if (!mounted || myGeneration != _flowGeneration) return;
       if (builds.isEmpty) {
         setState(() {
           _step = _Step.error;
@@ -153,16 +242,18 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
         _step = _Step.selectingBuild;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || myGeneration != _flowGeneration) return;
       setState(() {
         _step = _Step.error;
-        _error = e.toString();
+        _error = friendlyError(e);
       });
     }
   }
 
   Future<void> _pushBuild(Map<String, dynamic> build) async {
     if (!mounted) return;
+    final myGeneration = _flowGeneration;
+    _commitSent = false;
     setState(() {
       _step = _Step.downloading;
       _uploadProgress = 0;
@@ -222,7 +313,7 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
         // No per-chunk delay needed: fbp's write() awaits the platform's
         // write callback even for withoutResponse, which provides backpressure.
         for (var offset = 0; offset < bytes.length; offset += chunkSize) {
-          if (otaError != null) break;
+          if (otaError != null || myGeneration != _flowGeneration) break;
           final end = (offset + chunkSize).clamp(0, bytes.length);
           await firmwareChar.write(bytes.sublist(offset, end), withoutResponse: true);
           if (mounted) setState(() => _uploadProgress = end / bytes.length);
@@ -234,6 +325,8 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
 
         if (!mounted) return;
         setState(() => _statusText = 'Đang xác minh và cài đặt…');
+        if (myGeneration != _flowGeneration) return;
+        _commitSent = true;
         await controlChar.write('ota_commit'.codeUnits, withoutResponse: false);
 
         final disconnectSub = _device!.connectionState.listen((state) {
@@ -248,16 +341,16 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
         }
 
         if (otaError != null) throw Exception(otaError);
-        if (!mounted) return;
+        if (!mounted || myGeneration != _flowGeneration) return;
         setState(() => _step = _Step.done);
       } finally {
         await sub.cancel();
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || myGeneration != _flowGeneration) return;
       setState(() {
         _step = _Step.error;
-        _error = e.toString();
+        _error = friendlyError(e);
       });
     }
   }
@@ -277,6 +370,38 @@ class _BleFirmwareUpdateScreenState extends ConsumerState<BleFirmwareUpdateScree
           style: const TextStyle(color: Colors.white),
           child: switch (_step) {
             _Step.permissions => const Center(child: Text('Đang yêu cầu quyền…')),
+            _Step.bluetoothOff => BluetoothStateCard(
+                state: _adapterState,
+                onTurnOn: _turnOnBluetooth,
+                onOpenSettings: openAppSettings,
+              ),
+            _Step.locationOff => LocationServicesCard(onRetry: _requestPermissionsThenScan),
+            _Step.bluetoothInterrupted => _interruptedAt == _Step.uploading && _commitSent
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.check_circle, color: DeviceDetailScreen.goodColor, size: 48),
+                        const SizedBox(height: 16),
+                        Text(_interruptedMessage, textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: DeviceDetailScreen.goodColor,
+                            foregroundColor: DeviceDetailScreen.backgroundColor,
+                          ),
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Xong'),
+                        ),
+                      ],
+                    ),
+                  )
+                : BluetoothInterruptedView(
+                    message: _interruptedMessage,
+                    bluetoothOn: _adapterState == BluetoothAdapterState.on,
+                    onRetry: _resumeAfterBluetooth,
+                    onTurnOn: _turnOnBluetooth,
+                  ),
             _Step.scanning => _buildScanningView(),
             _Step.connecting => const Center(child: Text('Đang kết nối…')),
             _Step.selectingBuild => _buildSelectBuildView(),

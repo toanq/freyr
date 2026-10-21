@@ -64,6 +64,9 @@ dependencies:
   audioplayers: ^6.1.0
   path_provider: ^2.1.5
 
+  # Offline banner + auto-reload on reconnect (lib/common/network_status.dart).
+  connectivity_plus: ^7.3.1
+
   # google_sign_in / flutter_facebook_auth are intentionally NOT dependencies
   # right now. The Facebook Android SDK auto-initializes at app startup via a
   # manifest-declared ContentProvider and crashes immediately without a

@@ -5,6 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../common/network_errors.dart';
+import '../common/network_status.dart';
+import '../common/offline_banner.dart';
 import '../main.dart';
 import 'assistant_talk_sheet.dart';
 
@@ -50,6 +53,10 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   void initState() {
     super.initState();
     _reload();
+    // Back online after being offline: refresh readings/schedules.
+    ref.listenManual<bool>(networkStatusProvider, (wasOnline, online) {
+      if (wasOnline == false && online) _reload();
+    });
     // Only admins can list firmware builds (GET /admin/firmware) -- gates the
     // firmware-update button so regular owners don't hit a dead-end action.
     ref.read(apiClientProvider).currentUserRole().then((role) {
@@ -79,6 +86,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   }
 
   Future<void> _triggerManualWatering() async {
+    if (!ensureOnline(context, ref)) return;
     final duration = await _promptDurationSeconds(defaultSeconds: 10);
     if (duration == null) return;
 
@@ -92,7 +100,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể gửi yêu cầu tưới: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể gửi yêu cầu tưới: ${friendlyError(e)}')));
       }
     } finally {
       if (mounted) setState(() => _wateringNow = false);
@@ -100,6 +108,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   }
 
   Future<void> _pingDevice() async {
+    if (!ensureOnline(context, ref)) return;
     setState(() => _pinging = true);
     try {
       await ref.read(apiClientProvider).pingDevice(_deviceId);
@@ -110,7 +119,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể gửi ping: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể gửi ping: ${friendlyError(e)}')));
       }
     } finally {
       if (mounted) setState(() => _pinging = false);
@@ -118,6 +127,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   }
 
   Future<void> _toggleMuted() async {
+    if (!ensureOnline(context, ref)) return;
     final newValue = !_muted;
     setState(() => _togglingMuted = true);
     try {
@@ -125,7 +135,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       if (mounted) setState(() => _device = {..._device, 'muted': newValue});
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật trạng thái tắt tiếng: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật trạng thái tắt tiếng: ${friendlyError(e)}')));
       }
     } finally {
       if (mounted) setState(() => _togglingMuted = false);
@@ -133,6 +143,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   }
 
   Future<void> _openAssistantTalk() async {
+    if (!ensureOnline(context, ref)) return;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -155,6 +166,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   Future<void> _addSchedule() async {
+    if (!ensureOnline(context, ref)) return;
     final time = await _pickScheduleTime();
     if (time == null || !mounted) return;
 
@@ -168,7 +180,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       _loadSchedules();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể thêm lịch tưới: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể thêm lịch tưới: ${friendlyError(e)}')));
       }
     }
   }
@@ -223,6 +235,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   }
 
   Future<void> _toggleSchedule(Map<String, dynamic> schedule, bool enabled) async {
+    if (!ensureOnline(context, ref)) return;
     try {
       await ref.read(apiClientProvider).updateWateringSchedule(
             _deviceId,
@@ -235,12 +248,13 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       _loadSchedules();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật lịch tưới: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật lịch tưới: ${friendlyError(e)}')));
       }
     }
   }
 
   Future<void> _editSchedule(Map<String, dynamic> schedule) async {
+    if (!ensureOnline(context, ref)) return;
     final currentTime = TimeOfDay(hour: schedule['hour'] as int, minute: schedule['minute'] as int);
     final time = await _pickScheduleTime(initialTime: currentTime);
     if (time == null || !mounted) return;
@@ -260,18 +274,19 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       _loadSchedules();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật lịch tưới: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật lịch tưới: ${friendlyError(e)}')));
       }
     }
   }
 
   Future<void> _deleteSchedule(String scheduleId) async {
+    if (!ensureOnline(context, ref)) return;
     try {
       await ref.read(apiClientProvider).deleteWateringSchedule(_deviceId, scheduleId);
       _loadSchedules();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể xóa lịch tưới: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể xóa lịch tưới: ${friendlyError(e)}')));
       }
     }
   }
@@ -291,6 +306,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   ];
 
   Future<void> _editLowWaterAlerts() async {
+    if (!ensureOnline(context, ref)) return;
     final config = await _promptLowWaterAlertConfig();
     if (config == null) return;
     final (warning, critical, intervalMinutes) = config;
@@ -311,7 +327,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật cảnh báo: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật cảnh báo: ${friendlyError(e)}')));
       }
     }
   }
@@ -498,6 +514,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   }
 
   Future<void> _pickAndUploadAvatar() async {
+    if (!ensureOnline(context, ref)) return;
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
       builder: (context) => SafeArea(
@@ -537,7 +554,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải ảnh lên: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải ảnh lên: ${friendlyError(e)}')));
       }
     } finally {
       if (mounted) setState(() => _uploadingAvatar = false);
@@ -545,6 +562,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   }
 
   Future<void> _renameDevice() async {
+    if (!ensureOnline(context, ref)) return;
     final controller = TextEditingController(text: _name);
     final newName = await showDialog<String>(
       context: context,
@@ -567,12 +585,13 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       if (mounted) setState(() => _device = {..._device, 'name': newName});
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể đổi tên: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể đổi tên: ${friendlyError(e)}')));
       }
     }
   }
 
   Future<void> _deleteDevice() async {
+    if (!ensureOnline(context, ref)) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -595,18 +614,19 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể xóa thiết bị: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể xóa thiết bị: ${friendlyError(e)}')));
       }
     }
   }
 
   Future<void> _updateFirmware() async {
+    if (!ensureOnline(context, ref)) return;
     List<Map<String, dynamic>> builds;
     try {
       builds = await ref.read(apiClientProvider).listFirmwareBuilds();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải danh sách firmware: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải danh sách firmware: ${friendlyError(e)}')));
       }
       return;
     }
@@ -651,7 +671,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật firmware: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật firmware: ${friendlyError(e)}')));
       }
     }
   }

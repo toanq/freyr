@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../common/network_errors.dart';
 import '../devices/device_detail_screen.dart';
 import '../main.dart';
 
@@ -30,7 +31,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
       if (mounted) setState(() => _profile = profile);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải hồ sơ: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải hồ sơ: ${friendlyError(e)}')));
       }
     }
   }
@@ -74,7 +75,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải ảnh lên: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể tải ảnh lên: ${friendlyError(e)}')));
       }
     } finally {
       if (mounted) setState(() => _uploadingAvatar = false);
@@ -109,7 +110,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
       if (mounted) setState(() => _profile = {...?_profile, 'email': newEmail.isEmpty ? null : newEmail});
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật email: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể cập nhật email: ${friendlyError(e)}')));
       }
     }
   }
@@ -184,7 +185,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể đổi mật khẩu: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể đổi mật khẩu: ${friendlyError(e)}')));
       }
     }
   }

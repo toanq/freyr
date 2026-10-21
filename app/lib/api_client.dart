@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
 import 'app_config.dart';
+import 'common/network_errors.dart';
 
 // Carries the HTTP status code so callers can react to specific statuses
 // (e.g. 409 "already paired") instead of only having a generic error string.
@@ -26,7 +27,13 @@ class ApiClient {
   // cellular could reach the same address fine. Port 443 via the domain is
   // far more likely to pass through a router/ISP that specifically blocks 80.
   // main() passes the platform-configured URL (see app_config.dart).
-  ApiClient({this.baseUrl = defaultApiBaseUrl});
+  ApiClient({this.baseUrl = defaultApiBaseUrl, this.onTransportResult, this.isDefinitelyOffline});
+
+  // Wired to NetworkStatus in main(): every request reports whether it
+  // reached the server, and with no network interface at all requests fail
+  // immediately with NetworkException instead of waiting out a timeout.
+  final void Function({required bool ok})? onTransportResult;
+  final bool Function()? isDefinitelyOffline;
 
   // The backend only listens behind Traefik (docker-compose.yml), which strips
   // `/api` before forwarding — same convention the web console uses (VITE_API_URL=/api).
@@ -49,49 +56,49 @@ class ApiClient {
   }
 
   Future<void> register(String username, String? email, String password, {bool rememberMe = true}) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/auth/register'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'username': username, 'email': email, 'password': password}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
     await _storeToken(res, rememberMe: rememberMe);
   }
 
   Future<void> login(String username, String password, {bool rememberMe = true}) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/auth/token'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'username': username, 'password': password}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
     await _storeToken(res, rememberMe: rememberMe);
   }
 
   Future<void> loginWithGoogle(String idToken) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/auth/oauth/google'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'idToken': idToken}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
     await _storeToken(res, rememberMe: true);
   }
 
   Future<void> loginWithFacebook(String accessToken) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/auth/oauth/facebook'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'accessToken': accessToken}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
     await _storeToken(res, rememberMe: true);
   }
@@ -110,30 +117,30 @@ class ApiClient {
   }
 
   Future<List<Map<String, dynamic>>> listDevices() async {
-    final res = await http.get(Uri.parse('$baseUrl/devices'), headers: await _authHeaders()).timeout(_timeout);
+    final res = await _send(() async => http.get(Uri.parse('$baseUrl/devices'), headers: await _authHeaders()).timeout(_timeout));
     _throwIfError(res);
     return List<Map<String, dynamic>>.from(jsonDecode(res.body) as List);
   }
 
   Future<void> pairDevice(String activationCode, {String? macAddress}) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/devices/pair'),
           headers: await _authHeaders(),
           body: jsonEncode({'activationCode': activationCode, 'macAddress': macAddress}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   Future<void> triggerManualWatering(String deviceId, int durationSeconds) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/devices/$deviceId/water'),
           headers: await _authHeaders(),
           body: jsonEncode({'durationSeconds': durationSeconds}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
@@ -151,19 +158,19 @@ class ApiClient {
     final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/devices/$deviceId/assistant/turn'))
       ..headers.addAll({if (token != null) 'Authorization': 'Bearer $token'})
       ..files.add(await http.MultipartFile.fromPath('file', wavFile.path, contentType: MediaType('audio', 'wav')));
-    final streamedRes = await request.send().timeout(const Duration(seconds: 90));
-    final res = await http.Response.fromStream(streamedRes);
+    final res =
+        await _send(() async => http.Response.fromStream(await request.send().timeout(const Duration(seconds: 90))));
     _throwIfError(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   Future<void> pingDevice(String deviceId) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/devices/$deviceId/ping'),
           headers: await _authHeaders(),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
@@ -171,62 +178,62 @@ class ApiClient {
   // build's version/binary URL. Device compares the version itself and skips
   // if already current.
   Future<void> triggerOta(String deviceId, String firmwareBuildId) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/devices/$deviceId/ota'),
           headers: await _authHeaders(),
           body: jsonEncode({'firmwareBuildId': firmwareBuildId}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   Future<List<Map<String, dynamic>>> listFirmwareBuilds() async {
-    final res = await http.get(Uri.parse('$baseUrl/admin/firmware'), headers: await _authHeaders()).timeout(_timeout);
+    final res = await _send(() async => http.get(Uri.parse('$baseUrl/admin/firmware'), headers: await _authHeaders()).timeout(_timeout));
     _throwIfError(res);
     return List<Map<String, dynamic>>.from(jsonDecode(res.body) as List);
   }
 
   Future<void> setDeviceMuted(String deviceId, bool muted) async {
-    final res = await http
+    final res = await _send(() async => http
         .put(
           Uri.parse('$baseUrl/devices/$deviceId/muted'),
           headers: await _authHeaders(),
           body: jsonEncode({'muted': muted}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   // Registers/updates this installation's FCM push token against the signed-in
   // user, so an admin can send it a test notification from the web console.
   Future<void> registerFcmToken(String fcmToken) async {
-    final res = await http
+    final res = await _send(() async => http
         .put(
           Uri.parse('$baseUrl/users/me/fcm-token'),
           headers: await _authHeaders(),
           body: jsonEncode({'token': fcmToken}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   Future<List<Map<String, dynamic>>> listWateringSchedules(String deviceId) async {
-    final res = await http
+    final res = await _send(() async => http
         .get(Uri.parse('$baseUrl/devices/$deviceId/schedules'), headers: await _authHeaders())
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
     return List<Map<String, dynamic>>.from(jsonDecode(res.body) as List);
   }
 
   Future<void> createWateringSchedule(String deviceId, {required int hour, required int minute, required int durationSeconds}) async {
-    final res = await http
+    final res = await _send(() async => http
         .post(
           Uri.parse('$baseUrl/devices/$deviceId/schedules'),
           headers: await _authHeaders(),
           body: jsonEncode({'hour': hour, 'minute': minute, 'durationSeconds': durationSeconds}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
@@ -238,44 +245,44 @@ class ApiClient {
     required int durationSeconds,
     required bool enabled,
   }) async {
-    final res = await http
+    final res = await _send(() async => http
         .patch(
           Uri.parse('$baseUrl/devices/$deviceId/schedules/$scheduleId'),
           headers: await _authHeaders(),
           body: jsonEncode({'hour': hour, 'minute': minute, 'durationSeconds': durationSeconds, 'enabled': enabled}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   Future<void> deleteWateringSchedule(String deviceId, String scheduleId) async {
-    final res = await http
+    final res = await _send(() async => http
         .delete(Uri.parse('$baseUrl/devices/$deviceId/schedules/$scheduleId'), headers: await _authHeaders())
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   Future<Map<String, dynamic>> getDevice(String deviceId) async {
     final res =
-        await http.get(Uri.parse('$baseUrl/devices/$deviceId'), headers: await _authHeaders()).timeout(_timeout);
+        await _send(() async => http.get(Uri.parse('$baseUrl/devices/$deviceId'), headers: await _authHeaders()).timeout(_timeout));
     _throwIfError(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   Future<void> renameDevice(String deviceId, String name) async {
-    final res = await http
+    final res = await _send(() async => http
         .patch(
           Uri.parse('$baseUrl/devices/$deviceId'),
           headers: await _authHeaders(),
           body: jsonEncode({'name': name}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   Future<void> deleteDevice(String deviceId) async {
     final res =
-        await http.delete(Uri.parse('$baseUrl/devices/$deviceId'), headers: await _authHeaders()).timeout(_timeout);
+        await _send(() async => http.delete(Uri.parse('$baseUrl/devices/$deviceId'), headers: await _authHeaders()).timeout(_timeout));
     _throwIfError(res);
   }
 
@@ -291,7 +298,7 @@ class ApiClient {
     int? criticalPercent,
     int? intervalMinutes,
   }) async {
-    final res = await http
+    final res = await _send(() async => http
         .patch(
           Uri.parse('$baseUrl/devices/$deviceId/alerts'),
           headers: await _authHeaders(),
@@ -301,31 +308,31 @@ class ApiClient {
             'lowWaterAlertIntervalMinutes': intervalMinutes,
           }),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   Future<Map<String, dynamic>> getMyProfile() async {
-    final res = await http.get(Uri.parse('$baseUrl/users/me'), headers: await _authHeaders()).timeout(_timeout);
+    final res = await _send(() async => http.get(Uri.parse('$baseUrl/users/me'), headers: await _authHeaders()).timeout(_timeout));
     _throwIfError(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   Future<void> updateMyEmail(String? email) async {
-    final res = await http
+    final res = await _send(() async => http
         .patch(Uri.parse('$baseUrl/users/me'), headers: await _authHeaders(), body: jsonEncode({'email': email}))
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
   Future<void> changeMyPassword(String currentPassword, String newPassword) async {
-    final res = await http
+    final res = await _send(() async => http
         .patch(
           Uri.parse('$baseUrl/users/me/password'),
           headers: await _authHeaders(),
           body: jsonEncode({'currentPassword': currentPassword, 'newPassword': newPassword}),
         )
-        .timeout(_timeout);
+        .timeout(_timeout));
     _throwIfError(res);
   }
 
@@ -334,8 +341,8 @@ class ApiClient {
     final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/users/me/avatar'))
       ..headers.addAll({if (token != null) 'Authorization': 'Bearer $token'})
       ..files.add(await http.MultipartFile.fromPath('file', imageFile.path, contentType: _mediaTypeFor(imageFile.path)));
-    final streamedRes = await request.send().timeout(const Duration(seconds: 30));
-    final res = await http.Response.fromStream(streamedRes);
+    final res =
+        await _send(() async => http.Response.fromStream(await request.send().timeout(const Duration(seconds: 30))));
     _throwIfError(res);
     return (jsonDecode(res.body) as Map<String, dynamic>)['avatarUrl'] as String;
   }
@@ -347,8 +354,8 @@ class ApiClient {
       ..files.add(await http.MultipartFile.fromPath('file', imageFile.path, contentType: _mediaTypeFor(imageFile.path)));
     // Longer timeout than _timeout -- this uploads a multi-MB file, unlike the
     // small JSON payloads everywhere else.
-    final streamedRes = await request.send().timeout(const Duration(seconds: 30));
-    final res = await http.Response.fromStream(streamedRes);
+    final res =
+        await _send(() async => http.Response.fromStream(await request.send().timeout(const Duration(seconds: 30))));
     _throwIfError(res);
     return (jsonDecode(res.body) as Map<String, dynamic>)['avatarUrl'] as String;
   }
@@ -364,7 +371,7 @@ class ApiClient {
   // the owner-name chip in the device list for regular users, since it's
   // meaningless there (they only ever see their own devices).
   Future<String?> currentUserRole() async {
-    final res = await http.get(Uri.parse('$baseUrl/auth/session'), headers: await _authHeaders()).timeout(_timeout);
+    final res = await _send(() async => http.get(Uri.parse('$baseUrl/auth/session'), headers: await _authHeaders()).timeout(_timeout));
     _throwIfError(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return body['role'] as String?;
@@ -374,6 +381,30 @@ class ApiClient {
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     await _storage.write(key: 'jwt', value: body['token'] as String);
     await _storage.write(key: 'remember_me', value: rememberMe.toString());
+  }
+
+  // Lightweight reachability check used by NetworkStatus's recovery probe.
+  Future<bool> probe() async {
+    final res = await _send(() async => http.get(Uri.parse('$baseUrl/health')).timeout(const Duration(seconds: 8)));
+    return res.statusCode < 500;
+  }
+
+  // Any HTTP response (even 4xx/5xx) proves the network works; transport
+  // failures become NetworkException (see common/network_errors.dart).
+  Future<T> _send<T>(Future<T> Function() request) async {
+    if (isDefinitelyOffline?.call() ?? false) {
+      throw const NetworkException(NetworkErrorKind.offline);
+    }
+    try {
+      final result = await request();
+      onTransportResult?.call(ok: true);
+      return result;
+    } catch (e) {
+      final network = asNetworkException(e);
+      if (network == null) rethrow;
+      if (network.kind == NetworkErrorKind.offline) onTransportResult?.call(ok: false);
+      throw network;
+    }
   }
 
   void _throwIfError(http.Response res) {
