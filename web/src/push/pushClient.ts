@@ -1,4 +1,5 @@
 import { apiFetch } from '../api'
+import { isIos, isStandalone } from '../platform'
 
 // Web push via Firebase Cloud Messaging. The Firebase SDK is only loaded when
 // a push action runs; sw.js handles incoming pushes itself (no SDK there).
@@ -20,17 +21,6 @@ export type PushStatus = 'unsupported' | 'needs-install' | 'blocked' | 'off' | '
 export function isPushConfigured(): boolean {
   return Boolean(
     firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId && vapidKey,
-  )
-}
-
-function isIos(): boolean {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-}
-
-function isStandalone(): boolean {
-  return (
-    window.matchMedia?.('(display-mode: standalone)').matches ||
-    (navigator as Navigator & { standalone?: boolean }).standalone === true
   )
 }
 

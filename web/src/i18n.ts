@@ -7,6 +7,19 @@ export const strings = {
   // Login
   'login.subtitle': { vi: 'Đăng nhập để chăm sóc cây của bạn', en: 'Sign in to manage your plants' },
   'login.home': { vi: '← Về trang chủ', en: '← Back to homepage' },
+
+  // install suggestion (install/InstallBanner.tsx)
+  'install.title': { vi: 'Cài Synora lên điện thoại', en: 'Install Synora' },
+  'install.body': {
+    vi: 'Mở nhanh từ màn hình chính, toàn màn hình như một ứng dụng.',
+    en: 'Open it from your home screen, full screen like an app.',
+  },
+  'install.iosHint': {
+    vi: 'Chạm nút Chia sẻ trong Safari → "Thêm vào MH chính".',
+    en: 'In Safari, tap Share → "Add to Home Screen".',
+  },
+  'install.button': { vi: 'Cài đặt', en: 'Install' },
+  'install.later': { vi: 'Để sau', en: 'Not now' },
   'login.username': { vi: 'Tên đăng nhập', en: 'Username' },
   'login.password': { vi: 'Mật khẩu', en: 'Password' },
   'login.submit': { vi: 'Đăng nhập', en: 'Sign in' },

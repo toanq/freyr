@@ -15,6 +15,7 @@ import AppBarAvatar from './account/AppBarAvatar'
 import Profile from './account/Profile'
 import Orders from './cms/Orders'
 import Posts from './cms/Posts'
+import InstallBanner from './install/InstallBanner'
 
 type Session = { username: string; role: string }
 type View =
@@ -112,6 +113,7 @@ function Shell({ session, onLoggedOut }: { session: Session; onLoggedOut: () => 
         </nav>
       )}
       <main className="shell-content">
+        <InstallBanner />
         {view === 'dashboard' && isAdmin && <Dashboard />}
         {view === 'firmware' && isAdmin && <Firmware />}
         {view === 'orders' && isAdmin && <Orders />}
