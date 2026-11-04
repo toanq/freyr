@@ -18,3 +18,8 @@ server/data/cms-uploads/
 # Python bytecode, FreeCAD auto-backups
 __pycache__/
 *.FCBak
+
+# AI harness stuffs
+.claude/
+.claude-flow/
+.swarm/
