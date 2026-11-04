@@ -27,7 +27,7 @@ jobs:
     # GitHub auto-assigns these three labels to a self-hosted Apple Silicon
     # macOS runner (Settings -> Actions -> Runners shows the exact set) --
     # adjust if yours differ.
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [macOS, ARM64]
     defaults:
       run:
         working-directory: app
