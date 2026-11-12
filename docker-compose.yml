@@ -22,9 +22,7 @@ services:
       - ./traefik/dynamic.yml:/etc/traefik/dynamic/dynamic.yml:ro
 
   server:
-    build:
-      context: ./server
-      dockerfile: Synora.Api/Dockerfile
+    image: ghcr.io/toanq/freyr/api:latest
     env_file:
       - .env
     environment:
@@ -70,8 +68,7 @@ services:
       - tts
 
   asr:
-    build:
-      context: ./asr
+    image: ghcr.io/toanq/freyr/asr:latest
     volumes:
       # Model weights (several hundred MB, converted to CTranslate2 on first
       # startup -- see entrypoint.sh) persist here across restarts/rebuilds.
@@ -86,8 +83,7 @@ services:
       - ./asr/model-src:/model-src:ro
 
   tts:
-    build:
-      context: ./tts
+    image: ghcr.io/toanq/freyr/tts:latest
     environment:
       # Points vieneu's own huggingface_hub calls at the bind-mounted,
       # host-pre-downloaded cache below instead of hitting the network --
@@ -131,19 +127,7 @@ services:
       - "1883:1883"
 
   web:
-    build:
-      context: ./web
-      args:
-        VITE_API_URL: /api
-        # Baked into the build (see .env.example); empty hides the button.
-        VITE_GOOGLE_CLIENT_ID: ${OAuth__Google__WebClientId:-}
-        VITE_FACEBOOK_APP_ID: ${OAuth__Facebook__AppId:-}
-        # Web push (see .env.example); any empty value hides the opt-in.
-        VITE_FIREBASE_API_KEY: ${FIREBASE_WEB_API_KEY:-}
-        VITE_FIREBASE_PROJECT_ID: ${FIREBASE_WEB_PROJECT_ID:-}
-        VITE_FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_WEB_MESSAGING_SENDER_ID:-}
-        VITE_FIREBASE_APP_ID: ${FIREBASE_WEB_APP_ID:-}
-        VITE_FIREBASE_VAPID_KEY: ${FIREBASE_WEB_VAPID_KEY:-}
+    image: ghcr.io/toanq/freyr/web:latest
     volumes:
       - ./web/downloads:/usr/share/nginx/html/downloads
     depends_on:
@@ -154,10 +138,7 @@ services:
   # server's /cms/* endpoints (see traefik/dynamic.yml). Admin login uses
   # Synora Admin/SuperAdmin accounts.
   landing:
-    build:
-      context: ./landing
-      args:
-        VITE_API_URL: /api/cms
+    image: ghcr.io/toanq/freyr/landing:latest
 
   cloudflared:
     image: cloudflare/cloudflared:latest
