@@ -23,3 +23,9 @@ __pycache__/
 .claude/
 .claude-flow/
 .swarm/
+
+# KiCad autosave/backup noise
+hardware/kicad/*-backups/
+*.kicad_prl
+_autosave-*
+hardware/kicad/.history/

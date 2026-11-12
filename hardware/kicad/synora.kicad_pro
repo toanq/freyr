@@ -1,0 +1,12 @@
+{
+  "board": { "design_settings": { "defaults": {}, "rules": {} }, "layer_presets": [], "viewports": [] },
+  "boards": [],
+  "cvpcb": { "equivalence_files": [] },
+  "libraries": { "pinned_footprint_libs": [], "pinned_symbol_libs": [] },
+  "meta": { "filename": "synora.kicad_pro", "version": 1 },
+  "net_settings": { "classes": [ { "name": "Default", "clearance": 0.2, "track_width": 0.25, "via_diameter": 0.6, "via_drill": 0.3 } ], "meta": { "version": 3 } },
+  "pcbnew": { "page_layout_descr_file": "" },
+  "schematic": { "legacy_lib_dir": "", "legacy_lib_list": [] },
+  "sheets": [ [ "9a8c11a6-f6e2-405d-98be-a80e4ece6b62", "Root" ] ],
+  "text_variables": {}
+}
